@@ -271,5 +271,36 @@ degraded to escalate-or-fallback exactly as designed, no crash, at real producti
 scale. `eval/results.json` in this repo reflects the last run completed before the quota was
 hit; a fully clean cross-provider sweep needs to wait for the daily reset.
 
+**Real bug, found while looking for a clean screenshot: one specific model was failing JSON
+parsing 100% of the time, on every query, for a reason none of my other testing had hit.**
+Trying to find a query that shows a clean multi-tier escalation, `qwen/qwen3.6-27b` (Groq,
+tier 2 for qa/reasoning) came back `malformed_response` on all 4 different queries I tried it
+with. Four different queries failing identically, on one specific model, meant the model
+itself — not the query content — was the common factor. I printed its raw output directly and
+found it: this is a reasoning-tuned model that wraps its entire chain-of-thought in
+`<think>...</think>` tags before the actual JSON answer, e.g.:
+
+```
+<think>
+1. Analyze the Request: ...
+5. Construct JSON: `{"answer": "9", "confidence": 10}`
+...
+</think>
+
+{"answer": "9", "confidence": 10}
+```
+
+My JSON extraction (`_strip_fences`) only stripped markdown code fences — it had no handling
+for a reasoning block wrapping the real answer. My first fix attempt (grab everything from the
+first `{` to the last `}`) made it *worse*, not better: the model's reasoning trace quotes a
+draft copy of the JSON mid-thought (step 5 above), so "first `{`" landed inside that draft, and
+"last `}`" landed at the real final answer — the extracted span included all the reasoning
+text in between as invalid JSON. Fixed by taking the *last* `{` to the *last* `}` instead of
+first-to-last: the real, final answer is always the last complete JSON object emitted,
+regardless of how many draft copies the model's own reasoning quotes earlier. This generalizes
+past this one model — it handles any reasoning-wrapper convention (`<think>`, `<|thinking|>`,
+whatever a future model uses) without special-casing any of them, since it doesn't look for
+tags at all, just the last balanced-looking brace pair.
+
 ---
 *(more entries added below as later steps and eval-run results surface real findings)*

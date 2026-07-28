@@ -53,7 +53,16 @@ def _strip_fences(text: str) -> str:
         text = text.split("\n", 1)[1] if "\n" in text else text
         if text.endswith("```"):
             text = text.rsplit("```", 1)[0]
-    return text.strip()
+    text = text.strip()
+    # Reasoning-tuned models (e.g. qwen3.6) emit a chain-of-thought block — <think>...</think>
+    # or similar — before the actual JSON, and often quote draft copies of the JSON *inside*
+    # that reasoning too. The real answer is the last one emitted, so take the LAST {...},
+    # not the first — using the first would span from an early draft to the final object,
+    # swallowing all the reasoning text in between as invalid JSON.
+    start, end = text.rfind("{"), text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end + 1]
+    return text
 
 
 def call_json(call_fn, model_id: str, system: str, user: str, schema: type[BaseModel]):
