@@ -641,6 +641,90 @@ If I'd only had the story, I'd have had nothing.
 
 ---
 
+## 18. The judge wasn't judging — it was agreeing. And my benchmark couldn't tell.
+
+**Symptom** — after fixing the over-strict judge in #17, the benchmark improved across the
+board: pass rate 68% → 72%, compute saved 71.5% → 76.6%, ECE 0.23 → 0.13. Every number moved
+the right way.
+
+**Why I didn't trust it** — the judge is the *scorer*. I had just made the scorer more
+permissive and the score went up. Those two facts are compatible with "the router got better"
+and equally compatible with "the grading got easier", and **nothing in my benchmark could
+distinguish them**, because every query in it is scored by the judge and nothing else. My
+"pass rate" was never measuring correctness. It was measuring agreement with the judge.
+
+**How I found the cause** — I built the thing I was missing: 14 hand-labelled
+`(question, answer, should_pass)` cases with known-correct verdicts
+(`eval/judge_ground_truth.py`), half correct answers phrased awkwardly, half wrong answers
+phrased fluently. Then I measured the judge's two error types separately, because they are not
+equally bad:
+
+- **false pass** — accepts a wrong answer. The user is handed something incorrect and the
+  cascade stops. Harmful.
+- **false fail** — rejects a correct answer. The cascade escalates unnecessarily. Wasteful.
+
+The result was much worse than the benchmark implied:
+
+```
+false passes (accepted a wrong answer): 4/7 = 57%
+false fails  (rejected a right answer): 2/7 = 29%
+```
+
+**Root cause** — shown a wrong answer, the judge didn't verify it, it *ratified* it and
+invented a justification afterwards:
+
+| shown | judge said |
+|---|---|
+| `17 * 23 = 371` | *"The answer to the multiplication of 17 and 23 is correctly stated as 371."* |
+| ball costs `$0.10` | *"The cost of the ball is correctly given as $0.10, which is $1.00 less than the bat's cost..."* |
+| `"No information is given about any sheep deaths"` | *"The answer correctly states that the information provided is insufficient."* |
+
+That second reason is barely coherent — it's reverse-engineering support for a conclusion it
+had already adopted. The judge was never doing the arithmetic. It was pattern-matching
+"confident, well-formed answer" to "pass". My #17 fix had told it not to judge on style, and
+with style removed it had nothing left but agreement.
+
+**Fix** — make the judge commit to its own answer **before** it's allowed to give a verdict, by
+putting an `own_answer` field first in the required JSON:
+
+```
+1. Answer the question YOURSELF, independently, without being influenced by the proposed
+   answer. For arithmetic or logic, actually work it out.
+2. Compare your answer to the proposed one.
+3. Give a verdict.
+```
+
+`own_answer` is never read by any code. Its entire purpose is to force an independent
+commitment into the context before the verdict token is generated, so the model has to notice
+its own answer differs before it can approve. Measured effect:
+
+| | v2 (style-blind) | v3 (solve-first) |
+|---|---|---|
+| **false pass** (harmful) | **57%** | **29%** |
+| false fail (wasteful) | 29% | 29% |
+
+Both arithmetic ratifications are now caught. It's not fixed — 29% false passes is still bad,
+and a small model judging a small model has a real ceiling — but the harmful error rate halved
+at no cost to the wasteful one.
+
+**Takeaways:**
+
+1. **A metric scored by the component you're changing cannot evaluate that change.** This is
+   the most general lesson in this whole log. Every "improvement" to the judge automatically
+   improved the benchmark, in the same direction, regardless of whether it was an improvement.
+   The fix wasn't a better judge, it was *a second measurement the judge doesn't control*.
+2. **Split your error types before you set a target.** "72% pass rate" hid the fact that the
+   errors were overwhelmingly the harmful kind. One aggregate number let a 57% false-pass rate
+   look like a good result.
+3. **Adding an unused field changed the model's behaviour**, because generation order is
+   causal — what's in the context before a token influences that token. `own_answer` is dead
+   data to my code and the most load-bearing line in the prompt.
+4. This is the third time in this project the same shape appeared (#11, #16, and now this): a
+   number that looked good, wasn't checked because it looked good, and was measuring something
+   other than what its name said.
+
+---
+
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a
 conclusion was later proven wrong — those corrections are called out inside the original entry
 and cross-linked to the entry that overturned it (see #7 → #17, and #13).*

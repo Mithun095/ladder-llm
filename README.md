@@ -107,24 +107,32 @@ whole reason the registry tracks active rather than total parameters.
 ![QA query resolved at tier 1](output_images/Screenshot%20From%202026-07-28%2017-41-49.png)
 
 Escalation is the interesting case. *"A farmer has 17 sheep. All but 9 die. How many are left?"*
-is a trick question the 8B model at tier 1 reliably fails — an actual trace:
+is a trick question the 8B tier-1 model often gets wrong. Here is what it actually does, across
+three consecutive runs of the **same query** — verbatim, not cherry-picked:
 
 ```
-tier 1  llama-3.1-8b-instant  → judged_fail  (confidence 10)
-        judge: "The answer is given as 8, but 'all but 9 die' leaves 9."
-tier 2  qwen/qwen3.6-27b      → accepted     (confidence 10)
-        judge: "The answer is factually correct and directly addresses
-                the number of sheep remaining."
-        answer: 9
+run 1   tier 1  llama-3.1-8b-instant  → malformed_response
+        tier 2  qwen/qwen3.6-27b      → accepted   (confidence 10)
+                judge: "Correct number of sheep left after 9 die."     answer: 9
+
+run 2   tier 1  llama-3.1-8b-instant  → accepted   (confidence 10)     answer: 9
+
+run 3   tier 1  llama-3.1-8b-instant  → judged_fail (confidence 10)
+                judge: "The proposed answer is incorrect; 17 - 9 = 8."
+        tier 2  qwen/qwen3.6-27b      → judged_fail (confidence 10)
+                judge: "The proposed answer contradicts the own answer."
 ```
 
-The cheap model was confident and wrong, the judge caught it, and the cascade escalated exactly
-once and stopped — the whole thesis of the project in one trace. Note tier 1's confidence: **10,
-on a wrong answer.** That's the calibration problem, and the reason a separate judge exists.
+Run 1 is the system working as designed: tier 1 fails, tier 2 answers correctly, escalation
+stops. Run 2 shows tier 1 getting it right on its own. **Run 3 is the honest failure**, and it's
+the most informative of the three: the judge solved the riddle *itself*, got 8 — falling for the
+same trick — and therefore rejected the correct answer 9, twice.
 
-Run it a few times and tier 1 will sometimes fail with `malformed_response` instead of
-`judged_fail` — small models return unparseable JSON perhaps 10-15% of the time. Both are
-escalation triggers; only one of them charges compute for the attempt.
+That is the ceiling of this design stated plainly. A judge is only as good as its own ability to
+answer the question, so on problems that fool small models it fools the referee too. It's also
+why the judge is measured separately against known-correct labels rather than trusted — see
+[Results](#results). Note tier 1's confidence in run 3: **10, on a wrong answer.** That's the
+calibration problem, and the reason self-reported confidence isn't used for routing.
 
 ### Prompts to try
 
@@ -134,7 +142,7 @@ made per-run by a model, so tiers can vary by one between runs.
 | Prompt | Exercises | Expected |
 |---|---|---|
 | `What is the capital of Australia?` | cheapest path | tier 1, accepted, ~85% saved, <1s |
-| `A farmer has 17 sheep. All but 9 die. How many sheep are left?` | **escalation** | tier 1 judged_fail → tier 2 accepted, answer `9` |
+| `A farmer has 17 sheep. All but 9 die. How many sheep are left?` | **escalation** — run it 2-3 times | usually tier 1 fails → tier 2 answers `9`; sometimes tier 1 gets it, sometimes the judge itself falls for the trick (see above) |
 | `What is 17 * 23?` | reasoning | accepted, answer `391` |
 | `Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data, with tech stocks leading the decline before a late recovery on Friday.` | **payload preservation** | summarizes *that text* — not general stock-market commentary |
 | `Translate 'Where is the nearest train station?' to Spanish` | payload preservation | `¿Dónde está la estación de tren más cercana?` — translated, not answered |
@@ -175,22 +183,42 @@ Per task type, from the same run:
 | Translation | 3/5 | tier-2 translation model is OpenRouter and was unreachable |
 | Coding | 0/5 | **no model ran at all** — coding is OpenRouter at tiers 1-3 and the free daily quota was exhausted |
 
-**On the calibration number, and its limits.** The top confidence bucket claims 0.95 and
-delivers 0.82, so the models remain overconfident — that's why the judge fires on every answer
-rather than trusting a score. ECE improved 0.52 → 0.23 → 0.13 as real bugs were fixed, which is
-decent evidence it tracks something real. But it must be read with one caveat stated plainly:
-**this ECE measures confidence against the judge's verdicts, not against ground truth.** When
-the judge was over-strict it failed correct answers, which inflated the apparent overconfidence.
-A meaningful chunk of the improvement from 0.23 to 0.13 was the judge getting *less wrong*, not
-the models getting better calibrated. The metric is only ever as good as its referee — see
-[`BUILD-LOG.md` #17](BUILD-LOG.md).
+### Every number above is scored by the judge — so the judge is measured separately
 
-**Read `eval/results.json` with the caveats it records, not as a headline.** Queries where every
-tier was rate-limited are excluded from the savings average — they burn zero compute and would
-otherwise score a meaningless "100% saved". And the baseline arm reports `n/a` rather than 0%
-when the tier-4 model was unreachable, because scoring an outage as a baseline failure would
-credit the cascade for a provider problem. Since tier 4 is OpenRouter for every task type, the
-head-to-head baseline comparison needs free-tier quota headroom — see Limitations.
+This is the most important caveat in the project, and it's why there's a second harness.
+
+Pass rate, compute saved and ECE are all computed from **judge verdicts**. The judge is also a
+component I tune. So when a change to the judge's prompt made every one of those numbers improve
+at once, the benchmark could not tell me whether the router got better or the grading just got
+easier — it is structurally incapable of distinguishing those.
+
+So `eval/judge_ground_truth.py` holds 14 hand-labelled `(question, answer, should_pass)` cases
+with known-correct verdicts, and `checks/check_judge_accuracy.py` measures the judge's two error
+types separately, because they are not equally bad:
+
+| | what it means | measured |
+|---|---|---|
+| **False pass** | accepts a wrong answer — the user gets something incorrect | **29%** |
+| **False fail** | rejects a correct answer — wastes compute escalating | **29%** |
+
+A 29% false-pass rate is bad, and stating it is the point. It was **57%** before: shown
+`17 * 23 = 371`, the judge replied *"the answer to the multiplication of 17 and 23 is correctly
+stated as 371."* It wasn't verifying, it was ratifying whatever it was shown and inventing
+justification afterwards. The fix was to make it commit to its own answer *before* it's allowed
+to render a verdict ([`BUILD-LOG.md` #18](BUILD-LOG.md)); that halved the harmful error rate at
+no cost to the wasteful one.
+
+**What this means for the headline numbers:** treat 72% as "72% of answers this judge approved,"
+with a judge known to wrongly approve about 29% of wrong answers. The compute-savings figure is
+unaffected — it's counted from active parameters, not from verdicts — but the *quality* figures
+carry that uncertainty and should not be quoted without it.
+
+**Read `eval/results.json` with the caveats it records.** Queries where every tier was
+rate-limited are excluded from the savings average — they burn zero compute and would otherwise
+score a meaningless "100% saved". The baseline arm reports `n/a` rather than 0% when the tier-4
+model was unreachable, because scoring an outage as a baseline failure would credit the cascade
+for a provider problem. Since tier 4 is OpenRouter for every task type, the head-to-head baseline
+comparison needs free-tier quota headroom — see Limitations.
 
 ## Running it
 
@@ -222,8 +250,8 @@ src/
   metrics.py      compute saved (unclamped) and an illustrative $ figure
   formatter.py    per-task-type answer presentation
   app.py          Streamlit UI
-checks/           one assert-based script per concern; 5 of 11 run in CI without API keys
-eval/             25-query benchmark harness + calibration (ECE) analysis
+checks/           one assert-based script per concern; 5 of 12 run in CI without API keys
+eval/             25-query benchmark harness, calibration (ECE), and judge ground truth
 ```
 
 No pytest — each check is a plain script you run with `python -m checks.check_x` that prints
@@ -237,10 +265,11 @@ matters is that everything has something that fails loudly when it breaks.
   the former. The system degrades correctly — tiers get marked unavailable and the cascade
   escalates or returns a best-effort answer — verified under the real condition, not a simulated
   one. But it does mean the full cross-provider eval can only be run about once a day.
-- **The judge is the weakest component.** It's a small model, and even with task-aware guidance
-  it still occasionally nitpicks valid answers on subjective tasks. For objective task types the
-  right long-term answer isn't a better judge prompt, it's real ground truth — for coding, that
-  means running the tests.
+- **The judge is the weakest component, and it's quantified rather than hand-waved:** ~29%
+  false-pass rate (approves a wrong answer) and ~29% false-fail rate (rejects a correct one),
+  measured by `checks/check_judge_accuracy.py`. Every quality number in this repo inherits that
+  uncertainty. For objective task types the right long-term fix isn't a better judge prompt,
+  it's real ground truth — for coding, that means running the tests.
 - **The benchmark is 25 self-authored queries.** It's a good bug-finding instrument (it found
   five real bugs in its first run) and a weak statistical claim.
 - **Dollar savings are illustrative** — a documented approximate rate, not per-model billing.

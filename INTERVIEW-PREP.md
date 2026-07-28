@@ -299,6 +299,29 @@ is explicitly illustrative; these are free models with no bill to reconcile agai
 benchmark is 25 hand-written queries I chose myself, which is enough to catch bugs and not
 enough to make a strong statistical claim.
 
+**Q: Your benchmark is scored by your judge, and you tune your judge. Isn't that circular?**
+Yes, and it caught me. I changed the judge's prompt and every benchmark number improved at once
+— pass rate 68→72%, compute saved 71.5→76.6%, ECE 0.23→0.13. That's equally consistent with
+"the router got better" and "the grading got easier," and my benchmark was structurally
+incapable of telling me which, because the judge scores every query in it.
+
+So I built the measurement the judge doesn't control: 14 hand-labelled cases with known-correct
+verdicts, and I measure the judge's two error types separately, because they aren't equally bad
+— a **false pass** hands the user a wrong answer, a **false fail** only wastes compute
+escalating. The judge was **false-passing 57%** of wrong answers. Shown "17 times 23 is 371" it
+said *"correctly stated as 371."* It wasn't verifying anything, it was ratifying whatever it was
+shown and generating a justification afterwards.
+
+The fix was to make it answer the question *itself* first, in a required JSON field that comes
+before the verdict field. That field is never read by my code — its whole job is to force an
+independent commitment into the context before the verdict token gets generated, so it has to
+notice its own answer differs before it can approve. False passes dropped to 29%, false fails
+unchanged.
+
+*The general lesson I'd draw:* **a metric scored by the component you're changing cannot
+evaluate that change.** And splitting the error types mattered as much as fixing them — one
+aggregate "72% pass rate" was hiding that the errors were overwhelmingly the harmful kind.
+
 **Q: How do you know the savings number isn't optimistic marketing math?**
 Because I built the harness specifically to make it falsifiable, and because it has *caught* me
 being wrong three times — the MoE parameter count, the malformed-response accounting, and the
@@ -368,13 +391,15 @@ projects never do.
   13 of 20 answered queries resolved at tier 1.
 - Free-tier ceilings: OpenRouter 50 requests/day account-wide (1000/day with a $10 credit);
   Groq 30 requests/minute.
-- 11 self-checks, 5 of which run in CI without needing API keys (the rest need live API access).
+- 12 self-checks, 5 of which run in CI without needing API keys (the rest need live API access).
 - Zero paid APIs, zero GPUs.
 
 ## Things to be honest about if pushed
 
 - The 25-query benchmark is small and self-authored. It is a bug-finding instrument first and a
   statistical claim a distant second.
-- The judge is the weakest component and the least rigorous part of the design.
+- The judge is the weakest component, and I can quantify how weak: it wrongly approves about
+  29% of wrong answers. Every quality number in the project inherits that uncertainty. The
+  compute-savings figure does not — it's counted from active parameters, not verdicts.
 - Several results in this repo have been wrong before they were right, and the git history shows
   it. That's the intended impression, not a thing to explain away.

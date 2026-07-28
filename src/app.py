@@ -46,6 +46,19 @@ if "result" in st.session_state:
                 f"shown so you can see what was rejected, but it did **not** pass review.\n\n"
                 f"Judge's reason: *{last.judge_reason}*"
             )
+        elif result.trace and all(s.status == "unavailable" for s in result.trace):
+            # Almost always the free-tier daily cap rather than a real outage. Saying so beats
+            # making the reader cross-reference the trace against the README's limitations.
+            providers = "OpenRouter" if all("/" in s.model_id for s in result.trace) else "the provider"
+            st.error(
+                f"**No model was reachable for this query.** Every tier in range returned "
+                f"429/503, so nothing ran and no compute was spent.\n\n"
+                f"On a free tier this is usually the quota, not an outage — {providers} caps "
+                f"unpaid accounts at **50 requests per day, account-wide**, and Groq at 30 per "
+                f"minute. Coding queries route to OpenRouter at tiers 1-3, so they're the first "
+                f"to fail once the daily cap is gone. This is the cascade degrading as designed "
+                f"rather than crashing; see Limitations in the README."
+            )
         else:
             st.error(
                 "**No tier produced a usable answer.** Every model in range was either "
@@ -87,19 +100,30 @@ if "result" in st.session_state:
 
     st.divider()
     st.subheader("Cost of this answer")
+
+    # A run where every tier was unavailable burns zero compute and would score "100% saved".
+    # True, and completely meaningless — nothing was delivered. Savings are only a number when
+    # something came out; otherwise this metric flatters a total failure. (Same bug as the one
+    # fixed in the eval harness — see BUILD-LOG.md #11.)
+    produced_answer = result.answer != "No model produced a usable answer."
     cost_cols = st.columns(4)
-    cost_cols[0].metric(
-        "Compute saved vs. max tier",
-        f"{saved:.0f}%",
-        delta=None if saved >= 0 else "cascade cost more than the baseline",
-        delta_color="inverse",
-    )
+    if produced_answer:
+        cost_cols[0].metric(
+            "Compute saved vs. max tier",
+            f"{saved:.0f}%",
+            delta=None if saved >= 0 else "cascade cost more than the baseline",
+            delta_color="inverse",
+        )
+        cost_cols[2].metric(
+            "Illustrative $ saved",
+            f"${estimate_dollar_saved(result.trace, result.type):.5f}",
+            help="Approximate rate, not a real bill — these are free-tier models. See metrics.py.",
+        )
+    else:
+        cost_cols[0].metric("Compute saved vs. max tier", "n/a",
+                            help="No answer was produced, so there is nothing to have saved on.")
+        cost_cols[2].metric("Illustrative $ saved", "n/a")
     cost_cols[1].metric("Active params burned", f"{burned:.1f}B", help=f"Always-tier-{MAX_TIER} baseline: {baseline}B")
-    cost_cols[2].metric(
-        "Illustrative $ saved",
-        f"${estimate_dollar_saved(result.trace, result.type):.5f}",
-        help="Approximate rate, not a real bill — these are free-tier models. See metrics.py.",
-    )
     cost_cols[3].metric("End-to-end latency", "0.0s (cached)" if result.cached else f"{result.elapsed_ms / 1000:.1f}s")
 
     if result.optimized_prompt:

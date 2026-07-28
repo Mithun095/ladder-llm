@@ -297,6 +297,16 @@ against ground truth. An over-strict judge failing correct answers inflates the 
 overconfidence, so part of that improvement was the judge getting less wrong rather than the
 models getting better calibrated (`BUILD-LOG.md` #17). The metric is only as good as its referee.
 
+**`eval/judge_ground_truth.py` + `checks/check_judge_accuracy.py` — measuring the referee.**
+Everything above is scored by the judge, and the judge is a component that gets tuned. That
+makes the benchmark unable to answer the one question that matters when the judge changes: did
+the router improve, or did the grading get easier? These 14 hand-labelled cases have
+known-correct verdicts, so they measure the judge directly, and they report its two error types
+separately because those aren't equally bad — a **false pass** hands the user a wrong answer, a
+**false fail** only wastes compute escalating. Measuring it found a 57% false-pass rate the main
+benchmark had no way to reveal (`BUILD-LOG.md` #18). Run this check after any change to the
+judge's prompt.
+
 **CI** (`.github/workflows/checks.yml`) runs every check that doesn't need live API keys on
 each push: registry, calibration, metrics/formatter, JSON extraction, error handling. The last
 two exist specifically because they cover code that was broken silently and repeatedly, where

@@ -6,23 +6,39 @@ from src.llm_client import ModelUnavailable, call_groq, call_json
 
 JUDGE_MODEL = "llama-3.1-8b-instant"
 
-# "Strict" plus a vague "adequately addresses the question" made this judge fail correct
-# answers for stylistic reasons — it rejected "The remaining number of sheep is 9, which is
-# less than the original 17" for "not stating the remaining number", which it plainly does.
-# Naming the pass/fail conditions explicitly, and ruling style out of scope, is what stopped it.
-BASE_SYSTEM_PROMPT = """You are an answer judge. Given a question and a proposed answer, decide \
-whether the answer is correct and responsive.
+# This prompt has been through three versions, each fixing the previous one's measured failure.
+# Measure any change with checks/check_judge_accuracy.py — a looser judge raises the benchmark
+# pass rate while handing users wrong answers, and the main benchmark cannot detect that.
+#
+# v1 "You are a STRICT answer judge... decide if the answer is correct and adequately addresses
+#    the question" — graded presentation, not substance. Failed correct-but-verbose answers.
+# v2 explicit pass/fail conditions, style ruled out of scope — fixed the false fails, but
+#    measured a 57% FALSE PASS rate: shown "17 * 23 = 371" it replied "correctly stated".
+#    It wasn't verifying at all, it was agreeing with whatever it was shown and inventing a
+#    justification afterwards.
+# v3 (this one) makes the judge answer the question ITSELF first, in the same JSON, before it
+#    is allowed to render a verdict. Committing to an independent answer is what breaks the
+#    agree-with-the-input bias — it has to notice its own answer differs before it can approve.
+BASE_SYSTEM_PROMPT = """You are an answer judge.
 
-Judge the substance only:
-- PASS if the answer is factually correct and answers what was asked — even if it is terse, \
-verbose, informally worded, or shows no working.
-- FAIL if it is factually wrong, answers a different question, refuses to answer, or only \
-describes how one *would* find the answer instead of actually giving it.
+Work in this order, and do not skip step 1:
+1. Answer the question YOURSELF, independently, without being influenced by the proposed \
+answer. For arithmetic or logic, actually work it out.
+2. Compare your answer to the proposed one.
+3. Give a verdict.
 
-Do not fail an answer for style, formatting, length, or missing explanation.
+Verdict rules:
+- PASS if the proposed answer agrees with yours and answers what was asked — even if it is \
+terse, verbose, informally worded, or shows no working.
+- FAIL if it is factually wrong, contradicts your own answer, answers a different question, \
+refuses to answer an answerable question, or only describes how one *would* find the answer \
+instead of giving it.
+
+Do not fail an answer for style, formatting, length, or missing explanation. Do not assume the \
+proposed answer is correct — it frequently is not.
 
 Respond with ONLY this JSON shape, no other text:
-{"verdict": "pass"|"fail", "reason": "<one sentence>"}"""
+{"own_answer": "<your own answer from step 1, as briefly as possible — a number or one short phrase>", "verdict": "pass"|"fail", "reason": "<one sentence>"}"""
 
 # A generic "is this factually correct" rubric fails subjective tasks: it nitpicks a valid
 # summary for omitting a secondary detail, or a valid translation for not being a literal
@@ -38,6 +54,9 @@ TYPE_GUIDANCE = {
 
 
 class JudgeResult(BaseModel):
+    # own_answer isn't consumed anywhere — its job is to force the model to commit to an
+    # independent answer before the verdict field, so it can't just ratify what it was shown.
+    own_answer: str = ""
     verdict: Literal["pass", "fail"]
     reason: str
 
