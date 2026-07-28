@@ -1,0 +1,6 @@
+streamlit
+groq
+openai
+pydantic>=2
+python-dotenv
+requests
