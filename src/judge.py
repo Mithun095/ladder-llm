@@ -6,9 +6,22 @@ from src.llm_client import ModelUnavailable, call_groq, call_json
 
 JUDGE_MODEL = "llama-3.1-8b-instant"
 
-BASE_SYSTEM_PROMPT = """You are a strict answer judge. Given a question and a proposed answer, decide \
-if the answer is correct and adequately addresses the question. Respond with ONLY this JSON \
-shape, no other text:
+# "Strict" plus a vague "adequately addresses the question" made this judge fail correct
+# answers for stylistic reasons — it rejected "The remaining number of sheep is 9, which is
+# less than the original 17" for "not stating the remaining number", which it plainly does.
+# Naming the pass/fail conditions explicitly, and ruling style out of scope, is what stopped it.
+BASE_SYSTEM_PROMPT = """You are an answer judge. Given a question and a proposed answer, decide \
+whether the answer is correct and responsive.
+
+Judge the substance only:
+- PASS if the answer is factually correct and answers what was asked — even if it is terse, \
+verbose, informally worded, or shows no working.
+- FAIL if it is factually wrong, answers a different question, refuses to answer, or only \
+describes how one *would* find the answer instead of actually giving it.
+
+Do not fail an answer for style, formatting, length, or missing explanation.
+
+Respond with ONLY this JSON shape, no other text:
 {"verdict": "pass"|"fail", "reason": "<one sentence>"}"""
 
 # A generic "is this factually correct" rubric fails subjective tasks: it nitpicks a valid

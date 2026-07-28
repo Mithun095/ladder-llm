@@ -33,6 +33,25 @@ if "result" in st.session_state:
     if result.cached:
         st.success("Cache hit — this exact query was answered earlier, so no models were called at all.")
 
+    # The cascade returns the best answer it found even when no tier was ever accepted. Showing
+    # that silently is how a judge-rejected answer ends up looking like a verified one — say
+    # plainly that every tier failed, and why the last one did.
+    accepted = bool(result.trace) and result.trace[-1].status == "accepted"
+    if not accepted:
+        last = result.trace[-1] if result.trace else None
+        if last is not None and last.status == "judged_fail":
+            st.error(
+                f"**No tier produced an answer the judge accepted** — the cascade reached its "
+                f"ceiling (tier {last.tier}) and stopped. The answer below is the best attempt, "
+                f"shown so you can see what was rejected, but it did **not** pass review.\n\n"
+                f"Judge's reason: *{last.judge_reason}*"
+            )
+        else:
+            st.error(
+                "**No tier produced a usable answer.** Every model in range was either "
+                "unavailable or returned output that couldn't be parsed — see the trace."
+            )
+
     # Routing decision up top: the classification is what drives everything below it, so it
     # shouldn't be buried in the trace.
     st.markdown(
@@ -44,7 +63,7 @@ if "result" in st.session_state:
     answer_col, trace_col = st.columns([3, 2])
 
     with answer_col:
-        st.subheader("Answer")
+        st.subheader("Answer" if accepted else "Best attempt (rejected)")
         st.markdown(format_answer(result.answer, result.type))
 
     with trace_col:

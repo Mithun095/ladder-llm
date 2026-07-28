@@ -1,95 +1,133 @@
-# Build Log — issues I hit while building LadderLLM
+# Build Log — every bug I hit, and how I found it
 
-My own record of what actually went wrong (or would've gone wrong) while building this,
-and how I reasoned through each one. Kept so I can talk through it later — what broke,
-why, how I found the cause, how I fixed it.
+My working record of what broke while building LadderLLM. Each entry follows the same shape,
+so it's readable as a debugging casebook rather than a diary:
 
-## Building `llm_client.py`
+> **Symptom** — what I actually saw
+> **How I found the cause** — the steps, including the wrong turns
+> **Root cause** — what was actually wrong
+> **Fix** — what I changed, and where
+> **Takeaway** — the transferable lesson
 
-**Issue: Groq and OpenRouter don't share an error type, even though OpenRouter's API is
-"OpenAI-compatible."**
-I wanted one `try/except` around any model call to catch rate limits (429) and
-capacity errors (503) from either provider. But the `groq` SDK and the `openai` SDK
-(I use `openai` for OpenRouter, since its endpoint is OpenAI-compatible) are two separate
-libraries — each raises its *own* `APIStatusError` class. If I'd only caught
-`openai.APIStatusError`, a Groq-side outage would've slipped through uncaught and crashed
-the app instead of gracefully skipping that tier. Fix: I import both exception classes
-(`GroqAPIStatusError`, `OpenAIAPIStatusError`) and catch them as a tuple in `call_model()`.
+For what got built and why, see [`DEVLOG.md`](DEVLOG.md). For the interview framing of these
+same stories, see [`INTERVIEW-PREP.md`](INTERVIEW-PREP.md).
 
-**Design call: where does JSON-retry logic live?**
-Both my classifier and my judge need the same pattern — small models sometimes wrap JSON in
-markdown fences or add stray commentary, so I strip fences, validate with Pydantic, and if
-that fails, retry once with a stricter "reply with ONLY JSON" instruction. I didn't want to
-write that logic twice (a bug fix later would need to happen in two places and drift out of
-sync), so I pulled it into one shared `call_json()` helper that both modules call into.
+**The one theme worth noticing before you read on:** of the 14 issues below, only about half
+were bugs in code. The rest were bugs in a *prompt*, in a *metric*, in a *test*, or in my own
+assumption about what the failure meant. In an LLM system the code is often the least likely
+thing to be broken, and that changes where you look first.
 
-## Building `registry.py`
+---
 
-**Issue I avoided by checking first: model IDs in my own design notes might already be stale.**
-I'd sketched out a tier x task-type model grid before writing any code. Free-tier model
-catalogs on Groq and OpenRouter change over time — an ID I picked could 400 ("model not
-found") the first time I actually called it, with no warning until runtime. Instead of
-hardcoding the grid and finding out the hard way, I wrote a small discovery script that hits
-both providers' live model-list endpoints first, and cross-checked every grid entry against
-what's actually available *right now* before writing a single line into `registry.py`.
+## 1. Two SDKs, two different exception classes
 
-**Bug I caught before it shipped: MoE models don't burn their full parameter count per query.**
-`openai/gpt-oss-120b` sounds like "the big 120B model," but it's actually a
-Mixture-of-Experts model — only ~5.1B parameters are *active* per token, the rest sit idle.
-If I'd recorded 120 instead of 5.1 in the registry, my compute-savings metric would've been
-quietly wrong — it would've overstated how much compute the system actually saved, in the
-model's favor. I caught this by checking what "active params" actually means for MoE
-architectures before filling in the numbers, not after. The registry field is explicitly
-`active_params_b`, documented as active-not-total, with a comment explaining why per model.
+**Symptom** — none yet; caught while writing the code.
 
-## Building `cascade.py`
+**How I found the cause** — I wanted one `try/except` around any model call to catch rate
+limits (429) and capacity errors (503) from either provider. I went to write
+`except openai.APIStatusError` and stopped: OpenRouter is *OpenAI-compatible*, so I use the
+`openai` SDK for it — but Groq ships its own SDK, which defines its own separate
+`APIStatusError` class.
 
-**Real bug hunt: my end-to-end cascade test failed on the very first run.**
+**Root cause** — "OpenAI-compatible API" means the HTTP contract matches. It says nothing
+about Python exception hierarchies. Two libraries, two unrelated class trees, and
+`except openai.APIStatusError` would silently not catch a single Groq failure.
+
+**Fix** — import both and catch them as a tuple:
+
+```python
+from groq import APIStatusError as GroqAPIStatusError
+from openai import APIStatusError as OpenAIAPIStatusError
+...
+except (GroqAPIStatusError, OpenAIAPIStatusError) as e:
+```
+
+**Takeaway** — "compatible" is a claim about a wire protocol, not about your language's type
+system. A Groq outage would have crashed the app while an identical OpenRouter outage
+degraded gracefully, and nothing in testing would have shown it until Groq actually went down.
+
+---
+
+## 2. Model IDs in my design notes were a runtime landmine
+
+**Symptom** — none yet; avoided deliberately.
+
+**How I found the cause** — I'd sketched the tier × task-type model grid on paper before
+writing `registry.py`. Free-tier catalogs on Groq and OpenRouter change constantly. A stale ID
+doesn't fail at import, or in a linter, or in a type check — it fails at *runtime*, as a `400`,
+on whichever unlucky query first routes to that tier.
+
+**Root cause** — a hardcoded table of external identifiers with no verification step is
+config that lies quietly.
+
+**Fix** — wrote `checks/discover_models.py` to hit both providers' live model-list endpoints,
+and cross-checked all 20 grid entries against what actually existed *that day* before writing
+a single line of `registry.py`.
+
+**Takeaway** — when you hardcode identifiers owned by someone else, write the script that
+verifies them. It took ten minutes and turned a class of runtime error into a startup check.
+
+---
+
+## 3. Counting MoE models by total parameters would have inflated my headline metric
+
+**Symptom** — none yet; caught while filling in the registry.
+
+**How I found the cause** — I was about to write `120` for `openai/gpt-oss-120b`. The name
+says 120B. But it's a Mixture-of-Experts model: a router picks a small subset of "expert"
+subnetworks per token, so only ~5.1B parameters are actually *active* for any given token —
+the other ~112B sit idle.
+
+**Root cause** — "model size" is two different numbers, and the whole point of this project
+is the second one. Compute cost tracks *active* params per token, not total params on disk.
+
+**Fix** — the registry field is named `active_params_b`, not `params_b`, and every entry is
+documented as active-not-total.
+
+**Takeaway** — if I'd written 120, my compute-savings number would have been enormous and
+wrong, in my own favour, and it would have looked *great*. The most dangerous bugs in a
+metrics pipeline are the ones that flatter you — nobody investigates a good number.
+
+---
+
+## 4. The cascade failed on its very first end-to-end run — and there was no bug
+
+**Symptom** —
 
 ```
 Answer: No model produced a usable answer.
-Tier used: 2
 Trace:
-  tier=1 model=llama-3.1-8b-instant status=malformed_response confidence=None
-  tier=2 model=qwen/qwen3.6-27b status=malformed_response confidence=None
+  tier=1 model=llama-3.1-8b-instant status=malformed_response
+  tier=2 model=qwen/qwen3.6-27b     status=malformed_response
 ```
 
-Both tier 1 and tier 2 came back `malformed_response` — meaning my retry-once JSON parsing
-failed *twice in a row*, on two different models, in the same run. My first instinct was
-"there's a bug in my JSON parsing." Instead of immediately rewriting code, I isolated each
-layer to find out exactly where it broke:
+Both tiers, two different models, one run. My retry-once JSON parsing had failed twice in a row.
 
-1. Called the raw model directly with the identical prompt → got back clean, valid JSON.
-2. Called my JSON-parsing helper with that same output → parsed fine.
-3. Called the full provider-dispatch function with the real registry config → parsed fine.
-4. Reproduced the exact classify → optimize-prompt → answer chain the cascade uses,
-   end-to-end, three times in a row → parsed fine every time.
-5. Re-ran the original failing test again, with zero code changes → passed cleanly.
+**How I found the cause** — my instinct was "the JSON parsing is broken." Instead of editing
+it, I isolated one layer at a time:
 
-**What I concluded:** it wasn't a bug in my code at all — it was the exact "classifier/answer
-JSON is malformed ~10-15% of the time with small models" behavior I'd already read about
-before building this. Small models occasionally just return broken JSON, probabilistically,
-even with a good prompt. If I'd started editing `_strip_fences()` or my Pydantic schemas the
-moment I saw the failure, I'd have "fixed" something that was never broken, and possibly
-introduced a real bug chasing a phantom one. The actual validation here was that my
-error-handling design — log it as `malformed_response`, move to the next tier, and if
-everything fails, return a clear message instead of crashing — means this failure mode is a
-non-event for the end user instead of a crash. (If it had failed on *every* run instead of
-intermittently, that would've pointed at a real bug in the parsing code — it didn't.)
+1. Raw model call, identical prompt → clean, valid JSON.
+2. My JSON-parsing helper, fed that output → parsed fine.
+3. Full provider-dispatch function with the real registry config → parsed fine.
+4. The exact classify → optimize → answer chain the cascade runs, three times → fine each time.
+5. Re-ran the *original failing test*, zero code changes → passed.
 
-## Building `app.py` (Streamlit)
+**Root cause** — nothing. Small models return malformed JSON maybe 10-15% of the time. Two
+independent ~12% events landing together is a ~1.4% coincidence, and I hit it on run one.
 
-**Issue I avoided by knowing Streamlit's execution model up front: it reruns the whole
-script on every interaction.**
-Streamlit doesn't just re-render — it re-executes the entire Python script top to bottom on
-every single interaction, including every keystroke typed into a text box. If I'd written
-`result = run_cascade(query)` directly in the script body, it would've fired a full multi-model
-LLM cascade on every character typed into the input field, not just on submit. I gated the
-call behind `if submit and query`, and stashed the result in `st.session_state` so it survives
-the rerun that clicking Submit itself triggers, instead of getting lost or re-triggered.
+**Fix** — none. That's the point.
 
-**Real bug hit: `ModuleNotFoundError: No module named 'src'` the first time I opened the app
-in the browser.**
+**Takeaway** — this is the LLM-specific debugging skill: **before you fix a failure, establish
+whether it's deterministic.** Everything downstream of a model call is probabilistic. If I'd
+"fixed" `_extract_json` here I'd have introduced a real bug chasing a phantom. The rule I
+took from it: reproduce it three times, or don't touch it. (Had it failed on *every* run,
+that would have been a genuine signal — and later, in #12, it was.)
+
+---
+
+## 5. `ModuleNotFoundError: No module named 'src'` — only in Streamlit
+
+**Symptom** —
 
 ```
 File "/home/mithun/Desktop/ladder-llm/src/app.py", line 3, in <module>
@@ -97,210 +135,512 @@ File "/home/mithun/Desktop/ladder-llm/src/app.py", line 3, in <module>
 ModuleNotFoundError: No module named 'src'
 ```
 
-Every other module imports fine with `from src.cascade import ...` — my checks all pass, my
-package layout is correct. The difference is *how* the file gets launched. Everywhere else I
-run things as `python -m checks.check_whatever` from the project root, which puts the project
-root on Python's import path automatically. But `streamlit run src/app.py` launches the file
-directly, the same way `python src/app.py` would — and when Python runs a script directly, it
-only adds *that script's own directory* (`.../ladder-llm/src`) to `sys.path`, not the project
-root above it. So `src.cascade` can't resolve, because there's no `src` folder *inside*
-`src/` — the `src` package Python needs to see is the one one level up, and that level never
-got added to the path.
+Every other module imports `from src.cascade import ...` happily. All checks pass. Only the
+app breaks.
 
-Fix: launch with `PYTHONPATH=<project root> streamlit run src/app.py` instead of just
-`streamlit run src/app.py`. Setting `PYTHONPATH` explicitly adds the project root to the
-import path regardless of how the script itself gets invoked — no code changes needed, since
-this is purely about how the interpreter resolves imports, not a flaw in the package
-structure itself.
+**How I found the cause** — the import is identical everywhere, so the difference had to be
+*how the process starts*. Everywhere else I run `python -m checks.check_x` from the project
+root, and `-m` puts the current directory on `sys.path`. `streamlit run src/app.py` launches
+the file directly, exactly like `python src/app.py` would.
 
-## Edge-case hardening pass
+**Root cause** — when Python runs a *script* directly, it puts that script's own directory on
+`sys.path` — here, `.../ladder-llm/src`. So Python looks for a `src` package *inside* `src/`.
+The `src` it needs is one level up, and that level is never added.
 
-**Real bug hit while testing the "unavailable tier" path: I broke the cascade with my own
-test setup, and it taught me something about my error handling.**
-I tried to simulate an OpenRouter outage by pointing a registry entry at a made-up model ID
-(`totally-fake/does-not-exist:free`). That's not what a real outage looks like, though — it
-came back as `400 BadRequestError` ("not a valid model ID"), not `429`/`503`. My code only
-catches `429`/`503` as `ModelUnavailable`; the `400` propagated up and crashed the whole
-cascade. My first reaction was "that's a bug, catch more error codes." On reflection, it
-isn't — a `400` from a bad model ID means *my own registry is broken*, which is a real bug
-that should crash loudly during development, not get silently swallowed the same way as a
-transient free-tier outage. Since `registry.py` is built from a live model-list check, a
-`400` shouldn't happen in production; if it ever does, I want to see it, not have it quietly
-vanish into a trace as "unavailable." I left this uncaught on purpose. To actually test the
-outage path, I simulated a real `503` by mocking the provider call directly instead of using
-a fake model ID — that confirmed the tier gets skipped, logged as `"unavailable"`, and the
-cascade moves on cleanly.
+**Fix** — no code change; launch with the project root on the path:
 
-**Real pattern confirmed, not just theorized: self-reported confidence was ≥9 on every single
-live call I made, including a hallucinated answer.**
-I'd read in my own notes that small models tend to be overconfident, but I wanted to see it
-myself before trusting it. I asked "what's the 47th digit after the decimal point of pi?" —
-a question small models are known to get wrong — and the model answered "7" with confidence
-10. Across 5 separate live queries during this build, confidence never once landed in the
-5-7 "fire the judge" band; it was always 9 or 10, correct or not. That's not a coincidence at
-5-for-5 — it's the calibration problem stated plainly: a model's self-rating measures how
-fluent the answer *sounds*, not whether it's *right*. I flipped on the judge-always fallback
-mode (skip the confidence fast-paths entirely, always fire the judge) as a result. Re-running
-the same pi-digit question afterward: same wrong answer ("7"), but this time the judge caught
-it and marked the tier `judged_fail` with an accurate explanation of why it was wrong, instead
-of the confidence score alone waving it through.
-
-**Real bug hit while re-running my full check suite before calling this done: the classifier
-flip-flopped on a query it had classified correctly earlier.**
-"What is a closure in Python?" came back as `type=coding` this time, failing my own test
-that expects `qa`. My first instinct was to loosen the assertion — but I'd already written a
-note to myself in the classifier task that a failed type assertion is "a real signal about
-prompt quality," not something to paper over by relaxing the check. Before touching anything,
-I ran the exact same query through the classifier 6 more times in a row: 6/6 came back `qa`.
-So it wasn't broken, and it wasn't consistently broken either — it was genuine sampling
-variance on a query that sits right on the boundary between two categories ("closure in
-Python" is a programming concept, but the user is asking for an explanation, not code). I
-fixed the actual ambiguity: added one clarifying line per type to the classifier's system
-prompt, explicitly stating that conceptual questions about programming are `qa`, not `coding`,
-unless code is actually being requested. Re-ran the same query 8 times after the prompt
-change: 8/8 came back `qa`. Root-caused a fuzzy category boundary in the prompt, rather than
-patching the symptom by weakening the test.
-
-## Setting up CI
-
-**Real issue hit: a check that never calls a live API still needed API keys to even import.**
-I wanted `check_metrics_formatter.py` (pure logic — no network calls at all) to run in CI
-without needing real secrets. It failed anyway, with `KeyError: 'GROQ_API_KEY'`, thrown from
-inside `src/llm_client.py`. The reason: `llm_client.py` constructs the Groq and OpenAI clients
-at *module import time* (`_groq = Groq(api_key=os.environ["GROQ_API_KEY"])`), and
-`check_metrics_formatter.py` transitively imports `cascade.py` → `classifier.py` →
-`llm_client.py`, even though it never actually calls either client. Locally this was masked
-completely — `.env` is always present, so `load_dotenv()` silently backfills the keys — which
-is exactly why I only caught it by deliberately moving `.env` aside and re-running the check,
-simulating what a clean CI checkout actually looks like. Rather than refactor client
-construction to be lazy (a real fix, but a bigger change to an already-tested core module for
-a CI-only problem), I scoped the fix to CI: the workflow sets placeholder env var values
-(not real secrets) so the import succeeds, and documented in the workflow file exactly which
-checks still need real secrets and aren't run automatically.
-
-## Building and running the eval harness
-
-**Real crash, twice, from the same root cause: I never handled a model returning no content.**
-The very first live eval run crashed with `TypeError: 'NoneType' object is not subscriptable`
-inside `call_openrouter`. `resp.choices[0].message.content` was `None` — the tier-4 model
-(a reasoning-heavy Nemotron variant) apparently returned an empty content field on some query.
-I fixed it (`content or ""`), re-ran, and hit the *same error class* one line up:
-`resp.choices` itself was `None` this time, not just `.content`. That's a known OpenRouter
-quirk — an overloaded free model can return HTTP 200 with an error payload embedded in the
-body instead of a proper error status, and the SDK parses that into a response object with
-`choices=None` rather than raising. I hardened both `call_groq` and `call_openrouter` against
-an empty/missing `choices` list, not just empty content. Neither of these had shown up in any
-of my manual single-query tests earlier — it took a 25-query sweep hitting a wider variety of
-models and edge conditions to surface them. This is exactly why the eval harness earns its
-keep beyond producing a nice number: it's a stress test.
-
-**Real metrics bug, found by the eval harness reporting a nonsensical number.**
-One eval query ("What is 17 * 23?") reported `compute_saved_pct: 100.0` while also being
-marked as a *failed* run — i.e., "we saved all the compute" on a request that never produced
-a usable answer. I traced it: both tiers it tried came back `malformed_response` (the model
-ran and generated text, just not parseable JSON), and `cascade.py` was recording those steps
-with `active_params_b=0` — the same value used for a genuine `unavailable` outage where the
-model never even ran. That's wrong: a malformed response still cost real compute; only a
-429/503 rejection is actually free. Fixed by recording the model's real `active_params_b` on
-`malformed_response` steps too, same as any other real attempt.
-
-**Real methodology gap, found by a systematic pattern, not a single failure.**
-Summarization queries failed the judge almost every time in the first eval run — both the
-cascade *and* the always-max-tier baseline, across nearly all 5 summarization queries. That
-consistency across both paths ruled out "the small model is bad at summarizing" — it pointed
-at the judge itself. I pulled one failing case and read the judge's actual reasoning: it
-faulted a perfectly reasonable one-sentence summary for "missing the repetitive behavior"
-that was, on inspection, still present in a different phrasing. The judge's rubric
-("decide if the answer is correct") is built for a task with one right answer — QA, coding,
-reasoning — and doesn't map onto summarization or translation, where there's no single
-ground truth to be "correct" against, only "faithful." I added task-type-specific guidance to
-the judge's prompt (don't penalize summaries for omitting secondary detail; judge
-translations on meaning, not literal phrasing). Re-testing the same 5 summarization queries
-afterward: pass rate went from roughly 1-in-5 to 2-in-5 — a real, measurable improvement, but
-not a full fix. A small model judging open-ended, subjective output has a real ceiling that
-prompt tweaking alone doesn't erase — which is itself the finding, not a bug I kept chasing.
-
-**Real gap in my own test, not in the code it was testing.**
-After the fixes above, `check_cascade.py` started failing on an assertion I'd written months
-(well, tasks) earlier: it only accepted `"accepted"`, `"judged_fail"`, or `"unavailable"` as
-valid final trace states, and a run had legitimately ended on `"malformed_response"` — every
-tier up to the ceiling failed to parse. That's always been a valid way for a cascade to end;
-the check's assertion was just incomplete from the start, and it took a live run actually
-landing on that path to expose it.
-
-**Real bug caught live in the UI, not by any automated check: translation queries phrased as
-questions got answered instead of translated.**
-I asked the running app to translate "Where is the nearest train station?" to Spanish. Both
-tier 1 and tier 2 came back with a Spanish sentence about not having GPS access — the model
-had tried to *answer* the question ("where is the nearest station") instead of translating
-the sentence. Both tiers failing the same way, on two different models, ruled out "one model
-is just bad at this" and pointed at something upstream shared by both: the prompt they were
-each given. I traced it to `classify()` — its `optimized_prompt` field is supposed to rewrite
-the query "to be clear and unambiguous," but for this query it rewrote `"Translate 'Where is
-the nearest train station?' to Spanish"` into `"where is the nearest train station in spanish
-translation"`. That rewrite deleted the word "translate" as an instruction and left something
-that reads exactly like a real navigation question with "in spanish translation" tacked on at
-the end — which is exactly what both downstream models tried to answer. The fix belongs at the
-classifier, not the cascade or the answer prompt, because the corrupted prompt is what gets
-handed to *every* tier — patching downstream would leave the actual corruption in place. Added
-explicit guidance: for translation queries, preserve the literal "Translate 'X' to Y."
-structure instead of rephrasing it into a different sentence. Verified against 3 translation
-queries afterward — the instruction survives the rewrite intact every time now.
-
-**Real operational limit hit mid-audit: OpenRouter's free tier has a hard *daily* request cap,
-not just per-model rate limiting.**
-While re-running the eval harness for a clean final report, most OpenRouter-routed coding and
-translation queries started coming back `unavailable` even though they'd worked minutes
-earlier. I tested one OpenRouter model call directly and got the real answer:
-
-```
-RateLimitError: 429 - Rate limit exceeded: free-models-per-day.
-Add 10 credits to unlock 1000 free model requests per day.
-X-RateLimit-Limit: 50, X-RateLimit-Remaining: 0, X-RateLimit-Reset: 2026-07-29T00:00:00Z
+```bash
+PYTHONPATH=. streamlit run src/app.py
 ```
 
-OpenRouter's free tier caps unpaid accounts at **50 free-model requests per day, total, across
-every `:free` model** — not per-model, per-account. A day of heavy manual testing (debugging
-sessions, live UI checks, two earlier eval attempts) burned through it. This is a real
-constraint of building on free-tier infrastructure that the original design docs didn't call
-out explicitly, and it's worth stating plainly for anyone reproducing this project: expect to
-hit this within a single active day of testing unless you add the $10 one-time credit
-(1000/day) or spread testing across days. The upside: this validated the `ModelUnavailable`
-handling under a real, sustained outage rather than a simulated one — every affected query
-degraded to escalate-or-fallback exactly as designed, no crash, at real production-account
-scale. `eval/results.json` in this repo reflects the last run completed before the quota was
-hit; a fully clean cross-provider sweep needs to wait for the daily reset.
+**Takeaway** — an import error that only appears under one launcher is almost never a bad
+import. `python -m pkg.mod` and `python path/to/file.py` build `sys.path` differently, and
+knowing which one your tool uses saves an hour of restructuring a package that was fine.
 
-**Real bug, found while looking for a clean screenshot: one specific model was failing JSON
-parsing 100% of the time, on every query, for a reason none of my other testing had hit.**
-Trying to find a query that shows a clean multi-tier escalation, `qwen/qwen3.6-27b` (Groq,
-tier 2 for qa/reasoning) came back `malformed_response` on all 4 different queries I tried it
-with. Four different queries failing identically, on one specific model, meant the model
-itself — not the query content — was the common factor. I printed its raw output directly and
-found it: this is a reasoning-tuned model that wraps its entire chain-of-thought in
-`<think>...</think>` tags before the actual JSON answer, e.g.:
+---
+
+## 6. Simulating an outage with a fake model ID taught me the wrong lesson (at first)
+
+**Symptom** — to test the "tier unavailable" path I pointed a registry entry at
+`totally-fake/does-not-exist:free`. It came back `400 BadRequestError` and crashed the
+cascade, instead of being caught as `ModelUnavailable`.
+
+**How I found the cause** — obvious immediately: I only catch 429/503, and this was a 400.
+
+**Root cause** — my *test* was wrong, not the code. A made-up model ID isn't what an outage
+looks like. An outage is a real model the provider can't serve right now (429/503). A 400
+means "this model does not exist" — which, since `registry.py` is generated from a verified
+live model list, can only mean my registry is broken.
+
+**Fix** — deliberately left 400 uncaught, and documented why. A broken registry is a real bug
+that should crash loudly in development, not get silently swallowed and logged as a routine
+outage. To test the path properly I mocked the provider call to raise a genuine 503, and
+confirmed the tier is skipped, logged `unavailable`, and the cascade moves on.
+
+**Takeaway** — "catch more exception types" is usually the wrong reflex. Errors mean different
+things, and collapsing them into one bucket destroys information you need. Also: if your
+simulated failure doesn't look like the real failure, you're testing a fiction.
+
+---
+
+## 7. Self-reported confidence was 9-10 on every single call
+
+**Symptom** — my original design fired the judge only for "ambiguous" confidence (5-7), on
+the theory that ≥8 is clearly fine and ≤4 is clearly not. In 5 live runs, confidence *never
+once* landed in 5-7. It was 9 or 10 every time — on correct answers and incorrect ones alike.
+
+**Root cause** — a model's self-rated confidence measures how *fluent and well-formed* its
+answer feels, not whether it's true. There's no internal fact-check being consulted. So the
+ambiguous band the whole design hinged on was never reached, the judge never fired, and every
+answer was fast-accepted on a number that carried no information.
+
+**Fix** — flipped `JUDGE_ALWAYS = True` in `cascade.py`: skip the confidence shortcuts, judge
+every answer. Later quantified properly as an Expected Calibration Error of 0.23-0.52 depending
+on the run, with the top confidence bucket claiming ~0.98 and delivering ~0.75.
+
+**Takeaway** — I'd *read* that LLMs are overconfident. Reading it and measuring it are
+different: measuring it told me a specific branch of my design was dead code before I shipped
+it. The confidence shortcuts are still in the file behind the flag, because "here's the design,
+and here's the measurement that killed it" is worth more than a clean file.
+
+> ⚠️ **This entry originally contained a wrong example, and the correction is in #17.** I used
+> to illustrate it with "I asked for the 47th digit of pi, it answered 7 with confidence 10 —
+> a hallucination the judge later caught." The answer was **not** a hallucination. The 47th
+> digit of pi is 7. The model was right, my judge was wrong, and I'd written the incident up
+> as proof my judge worked. See #17.
+
+---
+
+## 8. The classifier flip-flopped on a query it had gotten right before
+
+**Symptom** — re-running the full check suite before calling the build done,
+`"What is a closure in Python?"` came back `type=coding`, failing an assertion expecting `qa`.
+
+**How I found the cause** — tempting fix: loosen the assertion to accept either. I'd written
+myself a note earlier that a failed type assertion is a signal about prompt quality, not test
+strictness, so instead I ran the same query 6 more times: **6/6 `qa`**. Not consistently
+broken — intermittent.
+
+**Root cause** — a genuinely ambiguous boundary. "Closure in Python" *is* a programming topic
+(→ coding), but the user wants an explanation, not code (→ qa). My prompt never said which
+way to resolve that, so the model resolved it by sampling.
+
+**Fix** — fixed the ambiguity at its source, in the classifier's system prompt: one clarifying
+line per type, explicitly stating that conceptual questions *about* programming are `qa`
+unless code is actually being requested. Re-ran 8 times: **8/8 `qa`**.
+
+**Takeaway** — an intermittent classification failure is usually an underspecified prompt, not
+a flaky model. And relaxing the assertion would have deleted the only signal telling me the
+prompt was vague.
+
+---
+
+## 9. A CI check that makes no network calls still needed API keys
+
+**Symptom** — `check_metrics_formatter.py` is pure arithmetic and string formatting, zero
+network. In CI it failed with `KeyError: 'GROQ_API_KEY'`.
+
+**How I found the cause** — the traceback pointed into `src/llm_client.py`, which the check
+never calls. Following the import chain: `check_metrics_formatter` → `cascade` → `classifier`
+→ `llm_client`, whose module body runs `_groq = Groq(api_key=os.environ["GROQ_API_KEY"])` at
+**import time**. Importing is enough to require the key.
+
+Locally this is invisible: `.env` always exists and `load_dotenv()` backfills it. I only
+reproduced it by moving `.env` aside to simulate a clean CI checkout.
+
+**Root cause** — side effects at module import time. Importing a module for one pure function
+drags in every side effect of everything it transitively imports.
+
+**Fix** — scoped to CI: the workflow sets placeholder (non-secret) env values so imports
+succeed. Making client construction lazy is the better fix, but it's a change to a
+well-tested core module for a CI-only problem, so I documented the tradeoff instead of
+taking it. *(Marked in the workflow file, not silently skipped.)*
+
+**Takeaway** — "works on my machine" is often literally "my machine has a file yours doesn't."
+Deleting your own config and re-running is the cheapest CI simulator there is.
+
+---
+
+## 10. Two crashes, one line apart, from the same wrong assumption
+
+**Symptom** — first live eval sweep crashed:
+
+```
+TypeError: 'NoneType' object is not subscriptable
+```
+
+inside `call_openrouter`. Fixed it, re-ran, hit the *same error class* one line up.
+
+**How I found the cause** — first crash: `resp.choices[0].message.content` was `None`. Fixed
+with `content or ""`. Second crash: `resp.choices` *itself* was `None` — so
+`resp.choices[0]` blew up before `.content` was ever reached.
+
+**Root cause** — an overloaded OpenRouter free model can return **HTTP 200 with an error
+payload in the body** instead of a proper error status. The SDK dutifully parses that into a
+response object with `choices=None` and raises nothing. My code assumed a 200 meant a
+well-formed completion.
+
+**Fix** — guard the whole shape, in both provider wrappers:
+
+```python
+if not resp.choices:
+    return ""
+return resp.choices[0].message.content or ""
+```
+
+**Takeaway** — two lessons. Fixing the exact line that threw, rather than the assumption
+behind it, gets you the same bug again one line over — the second crash was really the first
+one, unfixed. And a 200 status is not a promise about the body's shape.
+
+Neither of these appeared in any manual single-query test. It took a 25-query sweep across
+many models to surface them, which is the real argument for an eval harness: it's a stress
+test that happens to also produce a number.
+
+---
+
+## 11. "100% compute saved" on a query that completely failed
+
+**Symptom** — the eval report gave `"What is 17 * 23?"` a `compute_saved_pct` of **100.0**,
+while also marking it failed. Saved everything, delivered nothing.
+
+**How I found the cause** — a number that good on a query that bad is a metric bug, not a
+result. Traced the trace: both tiers returned `malformed_response`, and `cascade.py` recorded
+those steps with `active_params_b=0` — the same value used for a genuine `unavailable` outage.
+Zero params burned → 100% saved.
+
+**Root cause** — I'd conflated two different failures. `unavailable` means the provider
+rejected the request and the model never ran: genuinely free. `malformed_response` means the
+model **did** run and generate tokens, and only the parsing failed: that compute was spent
+and has to be paid for in the accounting.
+
+**Fix** — `malformed_response` steps now record the model's real `active_params_b`, same as
+any other attempt that actually ran.
+
+**Takeaway** — interrogate numbers that look *too good* at least as hard as numbers that look
+bad. This one was reporting a total failure as a perfect result. *(A related version of this
+survived until later — see #13.)*
+
+---
+
+## 12. One model returned malformed JSON on 100% of queries
+
+**Symptom** — hunting for a query that demonstrates a clean multi-tier escalation,
+`qwen/qwen3.6-27b` came back `malformed_response` on all four queries I tried.
+
+**How I found the cause** — the inverse of #4: four different queries, one model, identical
+failure. Deterministic, and the model is the common factor. So I printed its raw output:
 
 ```
 <think>
-1. Analyze the Request: ...
+1. Analyze the request: ...
 5. Construct JSON: `{"answer": "9", "confidence": 10}`
-...
 </think>
 
 {"answer": "9", "confidence": 10}
 ```
 
-My JSON extraction (`_strip_fences`) only stripped markdown code fences — it had no handling
-for a reasoning block wrapping the real answer. My first fix attempt (grab everything from the
-first `{` to the last `}`) made it *worse*, not better: the model's reasoning trace quotes a
-draft copy of the JSON mid-thought (step 5 above), so "first `{`" landed inside that draft, and
-"last `}`" landed at the real final answer — the extracted span included all the reasoning
-text in between as invalid JSON. Fixed by taking the *last* `{` to the *last* `}` instead of
-first-to-last: the real, final answer is always the last complete JSON object emitted,
-regardless of how many draft copies the model's own reasoning quotes earlier. This generalizes
-past this one model — it handles any reasoning-wrapper convention (`<think>`, `<|thinking|>`,
-whatever a future model uses) without special-casing any of them, since it doesn't look for
-tags at all, just the last balanced-looking brace pair.
+It's a reasoning-tuned model. It emits its whole chain of thought first, and — crucially —
+quotes a **draft copy of the JSON inside that reasoning**.
+
+**Root cause** — my extraction only stripped markdown code fences. It had no concept of a
+reasoning block wrapping the answer.
+
+**My first fix made it worse.** I took "everything from the first `{` to the last `}`". The
+first `{` landed inside the draft at step 5, the last `}` at the real answer — so the
+extracted span included all the reasoning text *between* them. Still unparseable.
+
+Second attempt: last `{` to last `}`. That fixed this model — and quietly broke every coding
+answer, because `{"answer": "def f(): return {1, 2}", ...}` has a brace *inside the answer
+string*, and the last `{` lands there. I only caught this because I wrote the regression test
+before trusting the fix.
+
+**Fix** — stop pattern-matching wrappers. Scan the text for every position where a *complete*
+JSON object parses, skip past each one found, and keep the last top-level object:
+
+```python
+while (i := text.find("{", i)) != -1:
+    try:
+        _, end = _DECODER.raw_decode(text, i)
+    except ValueError:
+        i += 1
+        continue
+    best = text[i:end]
+    i = end   # skip past it, so a nested `{` is never a candidate
+```
+
+Skipping to `end` is what makes nested objects and braces-in-strings safe; keeping the *last*
+match is what makes reasoning drafts safe. It handles `<think>`, markdown fences, chatty
+preambles and any future wrapper convention without knowing about any of them.
+
+**Fix to the process, too** — six wrapper shapes are now pinned in
+`checks/check_json_extraction.py`, which runs in CI. This function had been rewritten three
+times and silently broken twice; each break only showed up as a `malformed_response` in a live
+run, days later.
+
+**Takeaway** — the mirror image of #4: *deterministic* failure across varied inputs means the
+bug is real and the common factor is the culprit. And a fix you can't test is a guess — the
+brace-in-string regression would have shipped without that check file.
 
 ---
-*(more entries added below as later steps and eval-run results surface real findings)*
+
+## 13. The classifier was deleting the text it was asked to summarize
+
+This is the biggest one, and it corrects a conclusion I'd previously written down wrong.
+
+**Symptom** — summarization queries failed the judge almost every time: **0-1 out of 5**, in
+both the cascade and the always-max-tier baseline.
+
+**My first, wrong diagnosis** — both paths failing ruled out "the small model is bad at
+summarizing," so I looked at the judge. Its rubric ("decide if the answer is correct") is
+built for tasks with one right answer, and summarization has no single ground truth, only
+faithfulness. That reasoning was sound, so I added task-type-specific guidance to the judge's
+prompt (don't penalise a summary for dropping secondary detail; judge translation on meaning,
+not literal wording). It helped slightly. **I recorded that as the fix and moved on. It was
+not the fix.**
+
+**How I found the real cause** — re-measuring after unrelated work, summarization was still
+1/5. So I stopped reading verdicts and read the *answers*:
+
+> "I'm not aware of the current events in the stock market as my knowledge cutoff is
+> December 2023, but I can suggest..."
+
+That is not a bad summary. That is a model that **was never given the text**. The judge had
+been right every time.
+
+I printed what `classify()` actually hands downstream:
+
+| Raw query | What the model actually received |
+|---|---|
+| `Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data...` | `Summarize the main points from the paragraph about the stock market this week.` |
+| `Summarize: The quick brown fox jumps over the lazy dog repeatedly, day after day...` | `Summarize the story about a fox and a dog.` |
+
+There is no paragraph. There is no story. The classifier's `optimized_prompt` step — meant to
+rewrite queries "to be clear and unambiguous" — had **paraphrased away the payload**, leaving
+only a description of it. The model, given nothing to summarize, fell back to world knowledge.
+This is the same failure I'd hit earlier with translation, where
+`Translate 'Where is the nearest train station?' to Spanish` was rewritten into
+`where is the nearest train station in spanish translation` and both tiers tried to *answer*
+it. I'd patched translation with a prompt hint and never asked whether the same thing was
+happening elsewhere.
+
+**Root cause** — prompt rewriting is only safe when the query is **purely an instruction**.
+Summarization and translation queries are instruction **+ payload**, and a paraphrase is free
+to discard the payload — it's still a "clearer" sentence, just about nothing.
+
+**Fix** — structural, not another prompt hint:
+
+```python
+PRESERVE_QUERY_TYPES = {"summarization", "translation"}
+prompt = query if classification.type in PRESERVE_QUERY_TYPES else classification.optimized_prompt
+```
+
+Content-bearing task types bypass the rewrite entirely. No amount of prompt tuning makes a
+paraphrase reliably payload-preserving; not paraphrasing does.
+
+**Measured effect** (same queries, same judge, before → after, on the Groq-servable
+qa + summarization subset — the only arm runnable that day, see #14):
+
+| | before | after |
+|---|---|---|
+| summarization pass rate | 1/5 | **4/5** |
+| qa pass rate | 4/5 | **5/5** |
+| confidence ECE | 0.519 | **0.291** |
+
+On the full 25-query benchmark afterwards, summarization reached 5/5 and ECE fell further to
+0.131 — though part of *that* later drop was a separate judge fix, not this one (#17).
+
+**Takeaway** — three of them, and this is the entry I'd actually want to be asked about:
+
+1. **I documented a wrong root cause with confidence.** The judge-rubric reasoning was
+   plausible, produced a small improvement, and was wrong. A partial improvement is the most
+   effective disguise a wrong diagnosis has.
+2. **I read the verdicts instead of the outputs.** The answer text said "I was never given the
+   text" in plain English from the very first run. I was reading the judge's opinion of the
+   answer rather than the answer.
+3. **I fixed one symptom of a general bug.** Translation and summarization were the same bug.
+   Patching the instance in front of me left the other one live for days. When you fix
+   something, ask what else shares the mechanism.
+
+---
+
+## 14. Hitting two different real rate limits
+
+**Symptom A — OpenRouter, mid-audit** — most OpenRouter-routed queries started returning
+`unavailable`, having worked minutes earlier.
+
+**How I found the cause** — called an OpenRouter model directly, outside the app:
+
+```
+RateLimitError: 429 - Rate limit exceeded: free-models-per-day.
+X-RateLimit-Limit: 50, X-RateLimit-Remaining: 0, X-RateLimit-Reset: 2026-07-29T00:00:00Z
+```
+
+**Root cause** — not a bug. OpenRouter caps unpaid accounts at **50 free-model requests per
+day, account-wide across every `:free` model** — not per model. A day of debugging, live UI
+testing and two eval attempts burns that easily.
+
+**Symptom B — Groq, later the same day** — a test script died with a raw traceback:
+`groq.RateLimitError: ... requests per minute (RPM): Limit 30, Used 30. Please try again in 2s.`
+
+**How I found the cause** — this one *was* a bug, and an embarrassing one: I had
+`ModelUnavailable` handling specifically so a rate limit couldn't crash anything. But it lived
+in `call_model()`, and `classify()` and `judge()` call the shared `call_json()` **directly**,
+bypassing it. So the answering path degraded gracefully while the classifier — which runs on
+*every single query* — could take down the entire app.
+
+**Root cause** — error handling placed at a wrapper that not all callers go through. Two of
+three call paths were unprotected, and the unprotected ones ran more often.
+
+**Fix** — moved the 429/503 handling down into `call_json()`, where every path already goes.
+While there, I split the two rate limits by their actual behaviour: Groq's per-minute limit
+clears in seconds, so a transient 429 now waits briefly and retries once and usually just
+succeeds; only a second failure raises `ModelUnavailable`. OpenRouter's daily cap survives the
+retry and correctly degrades to skipping the tier. `classify()` falls back to a neutral
+medium/qa classification, and an unavailable judge now accepts the answer marked
+*unverified* rather than escalating — escalating would burn a bigger tier only to hit the same
+broken judge one rung up.
+
+**Takeaway** — when you add error handling, grep every caller of the thing you're protecting.
+"I handled that" was true of one path out of three, and I only found out because the busiest
+unprotected path finally got unlucky. Also worth stating plainly for anyone reproducing this:
+free-tier ceilings are a real architectural constraint here, not a footnote. The upside is
+that both limits validated `ModelUnavailable` under genuine sustained outages rather than
+mocked ones.
+
+---
+
+## 15. My own check had an incomplete assertion
+
+**Symptom** — after the fixes above, `check_cascade.py` started failing on an assertion I'd
+written several tasks earlier.
+
+**How I found the cause** — it accepted only `accepted`, `judged_fail` and `unavailable` as
+valid final trace states. A run had legitimately ended on `malformed_response` — every tier up
+to the ceiling failed to parse.
+
+**Root cause** — the check, not the cascade. Ending on `malformed_response` had always been a
+valid terminal state; my assertion had been incomplete from the day I wrote it, and no run had
+happened to land there until now.
+
+**Fix** — corrected the check. Deliberately *not* the cascade.
+
+**Takeaway** — a newly failing test is not proof the code broke. Work out which one is wrong
+before you "fix" the one that's shouting.
+
+---
+
+## 16. The savings metric was clamped, hiding its own worst case
+
+**Symptom** — none visible. That was the problem.
+
+**How I found the cause** — reading `metrics.py` during a cleanup pass:
+
+```python
+return max(0.0, (baseline - used) / baseline * 100)
+```
+
+**Root cause** — a cascade that escalates far enough can burn **more** active params than one
+direct max-tier call. Expert-difficulty coding: 32B at tier 3, then 55B at tier 4 = 87B, versus
+a 55B baseline. That's −58% "saved". The clamp silently reported it as 0%, so the routing's
+genuine worst case could never appear in any number I published.
+
+**Fix** — dropped the clamp; negative savings now show as negative, in the UI and the eval
+report, with the reasoning in a comment. Updated the check that asserted `0 <= pct <= 100` and
+added one asserting the expensive case reports negative.
+
+**The fix immediately caught a second bug.** With the clamp gone, summarization queries started
+reporting **−42%**. Tier 2 for summarization was `llama-3.3-70b-versatile` — 70B *dense*, i.e.
+more active params than the 55B-active tier-4 model at the top of the ladder. A tier-2 slot
+that costs more than the ceiling isn't a tradeoff, it's a routing bug, and the clamp had been
+hiding it since the registry was written. Swapped to a 27B model.
+
+**Takeaway** — same family as #3 and #11, and the reason I keep flagging it: this metric
+pipeline has now produced three separate flattering-but-wrong numbers. A clamp, a default of
+zero, a plausible-looking parameter count. None crashed. All made the system look better than
+it was. Defensive defaults in a *measurement* path aren't defensive — they're a thumb on the
+scale, and the one that hid −42% was doing it for months of commits.
+
+---
+
+## 17. My judge was failing correct answers — and the proof that it worked was wrong
+
+The one I'd most want to be asked about, along with #13.
+
+**Symptom** — running my standard prompt set after unrelated work, two obviously-fine answers
+came back `judged_fail`:
+
+```
+query : A farmer has 17 sheep. All but 9 die. How many sheep are left?
+answer: "The remaining number of sheep is 9, which is less than the original number of 17."
+judge : FAIL — "The answer does not state the remaining number of sheep."
+```
+
+It states the remaining number of sheep. It is the fourth word.
+
+**How I found the cause** — I'd been reading the judge's *verdicts* as data about the answers.
+Reading them as data about the **judge** instead, a pattern appeared immediately: every false
+failure was about form, not fact — "doesn't show the calculation process," "lacks context,"
+"too simplistic," "doesn't provide a numerical solution" (about an answer containing a number).
+
+**Root cause** — my judge prompt:
+
+> *"You are a **strict** answer judge... decide if the answer is correct and **adequately
+> addresses** the question."*
+
+"Strict" invites rejection, and "adequately addresses" is undefined, so the model filled the
+gap with the only rubric it had: completeness of presentation. It was grading essays.
+
+**Fix** — replaced the vague instruction with explicit conditions, and ruled style out of scope:
+
+> PASS if the answer is factually correct and answers what was asked — even if it is terse,
+> verbose, informally worded, or shows no working.
+> FAIL if it is factually wrong, answers a different question, refuses, or only describes how
+> one *would* find the answer instead of giving it.
+> Do not fail an answer for style, formatting, length, or missing explanation.
+
+The "only describes how one would find the answer" clause is deliberate — that's a real failure
+mode I'd seen (a model responding to "what is the 47th digit of pi" with a tutorial on the
+Chudnovsky algorithm), and it needed to stay a FAIL while terseness stopped being one.
+
+**Then the fix exposed something worse.** With the judge no longer failing things for style, I
+re-ran my standard set, and the pi question came back **accepted, answer "7"**. I'd been using
+that exact question since the earliest edge-case testing as my canonical hallucination example:
+*"it answers 7 with confidence 10, and once the judge was mandatory it correctly caught it."*
+It's written up that way in this log and in my interview notes.
+
+So I actually checked:
+
+```
+π = 3.14159265358979323846264338327950288419716939937510...
+             the 47th digit after the decimal point is 7
+```
+
+**The model was right. It had always been right.** And what I had recorded as "my judge
+correctly catching a hallucination" was my judge **rejecting a correct answer for not showing
+its working** — the exact bug in this entry, sitting in plain sight in my own documentation,
+being cited as evidence the system worked.
+
+**What this cost, and what saved it.** The overconfidence conclusion the pi example was
+supporting is still correct — but it's supported by the ECE measurement (top confidence bucket
+claims 0.98, delivers 0.75), not by that anecdote. The measurement survived; the story didn't.
+If I'd only had the story, I'd have had nothing.
+
+**Takeaways** — three, and they're the ones I'd actually defend in an interview:
+
+1. **I never verified my own test case.** I picked "the 47th digit of pi" *because* I assumed
+   small models get it wrong, and then used the model's answer as evidence for the assumption
+   that made me pick the question. Circular, and it stood for the entire project because
+   checking took one line of Python I never ran.
+2. **A component that fails safe still fails.** A judge that wrongly rejects looks *responsible*
+   — it produces cautious escalations, not visible errors. It was silently pushing correct
+   answers up the ladder, spending compute to replace right answers, and every single false
+   rejection read as the system being appropriately careful.
+3. **Evidence that a thing works is the last place you look for a bug in it** — which is
+   exactly why it's where this one lived. Same shape as #13: a wrong conclusion, documented
+   confidently, protected by the fact that it *looked* like a success.
+
+---
+
+*Entries are appended as new issues surface. Nothing here is retro-edited except where a
+conclusion was later proven wrong — those corrections are called out inside the original entry
+and cross-linked to the entry that overturned it (see #7 → #17, and #13).*

@@ -1,218 +1,380 @@
 # Interview Prep — LadderLLM
 
-Everything you need to talk about this project confidently: the pitch, the architecture, the
-real decisions you made, the real bugs you hit, and a full anticipated Q&A. Read `BUILD-LOG.md`
-and `DEVLOG.md` alongside this if you want the raw, blow-by-blow version of anything here.
+Everything needed to talk about this project confidently: the pitch, the architecture, the
+decisions and *why* they were made, the real bugs, and a full anticipated Q&A.
+
+Read this alongside [`BUILD-LOG.md`](BUILD-LOG.md) (the debugging casebook) and
+[`DEVLOG.md`](DEVLOG.md) (what was built and why).
+
+**One rule before anything else: don't oversell.** The strongest thing about this project isn't
+the savings number — it's that the savings number is *checkable*, and that several of them were
+wrong before they were right. Lead with the measurement discipline. An interviewer who catches
+you inflating a number stops listening to everything after it.
 
 ---
 
 ## The 30-second pitch
 
-"I built a router that sends each LLM query to the cheapest model that can plausibly handle
-it, and only escalates to a bigger model when a judge model confirms the cheap answer
-genuinely failed. It classifies difficulty and task type first, then walks a ladder of free
-models — Groq and OpenRouter — instead of always calling the biggest one 'just in case.' On my
-eval set it saved about 64% of the compute a naive always-biggest-model approach would burn,
-at roughly the same answer-quality pass rate. It's the same idea behind FrugalGPT and
-RouteLLM, applied to a fully free-tier stack."
+> "It's a router that sends each LLM query to the cheapest model that can plausibly handle it,
+> and escalates to a bigger one only when a judge model confirms the cheap answer actually
+> failed. It classifies difficulty and task type first, then walks a ladder of free models
+> across Groq and OpenRouter instead of always calling the biggest one just in case. On my
+> benchmark it saves about 77% of the active-parameter compute a naive always-biggest-model
+> approach would burn, with two thirds of queries resolving at the cheapest tier. It's the
+> FrugalGPT / RouteLLM cascade pattern, built on a fully free-tier stack — and I built an eval
+> harness for it specifically so the savings claim is measured rather than asserted."
 
 ## The 2-minute walkthrough
 
-1. A query comes in. A small model (`llama-3.1-8b-instant`) classifies it along two axes —
+1. **A query comes in.** A small model (`llama-3.1-8b-instant`) classifies it on two axes —
    difficulty (easy/medium/hard/expert) and task type (qa/coding/reasoning/summarization/
-   translation) — and rewrites the query into a cleaner prompt.
-2. A registry (a plain dict, tier × type → model) picks the specific model for the current
-   tier. Tiers 1-4 span from an 8B model up to a 550B-parameter MoE model with ~55B active
-   params per token.
-3. The model answers and self-rates its own confidence 1-10, in the same structured JSON
+   translation) — and, for instruction-only queries, rewrites it into a cleaner prompt.
+2. **A registry picks the model.** A plain dict keyed on `(tier, task_type)`. Difficulty sets
+   the starting tier and the ceiling; type selects the column. Tiers run from an 8B model up to
+   a 550B MoE model with ~55B active params per token.
+3. **The model answers** and self-rates its confidence 1-10 in the same structured JSON
    response.
-4. A judge model (also `llama-3.1-8b-instant`) checks the answer. If it passes, the answer is
-   returned with a trace showing every tier tried. If it fails, the cascade escalates to the
-   next tier and tries again, up to a difficulty-dependent ceiling.
-5. A Streamlit UI shows the answer, the full routing trace (which models were tried and why),
-   and how much compute was saved compared to always using the biggest tier.
+4. **A judge model checks the answer** — binary pass/fail, with a task-type-aware rubric. Pass
+   returns the answer with the full trace. Fail escalates to the next tier, up to the
+   difficulty-dependent ceiling.
+5. **A Streamlit UI** shows the answer, the live routing trace (every model tried, what the
+   judge said, how long each took), and the compute saved versus always using the biggest tier.
 
-## Why each design decision, in your own words
+Add if there's time: *"and there's an exact-match cache in front of the whole thing, so a repeat
+query costs zero LLM calls — not even the classifier."*
 
-- **Why classify difficulty AND type, not just one?** Type determines *which* model is good at
-  the task (a coding-specialized small model vs. a general one); difficulty determines *how far
-  up the ladder* to start. Conflating them would mean either wasting compute on easy queries of
-  a "hard" type, or under-serving genuinely hard queries of a "usually easy" type.
-- **Why self-reported confidence AND a separate judge, not just one?** Confidence is nearly
-  free (same API call, extra JSON field) but I found empirically it's unreliable — see the
-  calibration section below. The judge costs a second API call but is a genuine second
-  opinion. Originally I only fired the judge on ambiguous confidence (5-7); I flipped to
-  "always judge" after finding confidence was ~9-10 regardless of correctness in live testing.
-- **Why is the judge binary pass/fail, not a 1-10 score?** A small model judging on a fine
-  numeric scale is asking it to do something it's not well-suited for — nuanced quality scoring
-  requires more capability than a small model reliably has. Binary "does this look right"
-  is a scope a small model can actually do reasonably well.
-- **Why a plain dict for the registry instead of a class hierarchy?** There was never more than
-  one behavior (look up a model config by tier and type) — a dict already does that.
-  A class hierarchy would be solving a problem I didn't have.
-- **Why does compute-saved use active params, not total params?** Several tier-4/tier-3 models
-  are Mixture-of-Experts — `gpt-oss-120b` is ~117B total parameters but only ~5.1B active per
-  token. If I'd used total params, the compute-saved metric would look artificially generous
-  (or in one specific case, artificially *bad* — a hard coding query resolving at a 32B-active
-  tier-3 model shows less "savings" than expected relative to the 55B-active tier 4, because
-  active-param sizing isn't strictly monotonic with the tier number). Reporting the raw
-  numbers alongside the percentage, rather than hiding that, was a deliberate choice.
+## Why each decision, in your own words
 
-## Real bugs you found (STAR-format, ready to tell)
+**Why classify difficulty *and* type, not one "quality" score?**
+Type decides *which* model is good at the work — a coding-specialised 7B beats a general 8B at
+writing code, and that ranking doesn't transfer to translation. Difficulty decides *how far up
+the ladder to start*. Collapsing them means either wasting compute on easy queries that happen
+to be a hard type, or under-serving hard queries of an easy type.
 
-### "Tell me about a bug that looked like a real problem but wasn't."
+**Why both self-reported confidence and a separate judge?**
+Confidence is nearly free — one extra field in a call you're already making. The judge costs a
+whole second API call but is a genuine second opinion. I designed it to trust confidence at the
+extremes and only pay for the judge in the ambiguous middle. **Then I measured it, and that
+design was wrong** — confidence came back 9 or 10 on every call regardless of correctness, so
+the ambiguous band was never reached and the judge never fired. I flipped to judging every
+answer. The confidence shortcut code is still in the file behind a flag, because the more
+interesting artefact is the design *plus* the measurement that killed it.
 
-**Situation:** My end-to-end cascade test failed on the very first run — both tier 1 and tier
-2 came back with malformed JSON, for the identical query and code.
-**Task:** Figure out if this was a real bug in my parsing/retry logic before touching any code.
-**Action:** I isolated each layer instead of guessing — called the raw model directly (clean
-JSON came back), called my JSON-parsing helper directly (parsed fine), called the full
-provider-dispatch path (parsed fine), reproduced the exact classify→optimize→answer chain the
-cascade uses (parsed fine, three times), then re-ran the original failing test with zero code
-changes.
-**Result:** It passed cleanly on re-run. It wasn't a bug — it was the known ~10-15%
-malformed-JSON rate from small models, hitting twice in a row by chance. If I'd started
-editing `_strip_fences()` or my Pydantic schema the moment I saw the failure, I'd have
-"fixed" something that was never broken. The real validation was that my error-handling design
-(log it, escalate, degrade gracefully) turned a probabilistic failure mode into a non-event.
+**Why is the judge binary pass/fail rather than a 1-10 score?**
+A small model can reliably answer "does this look right, yes or no." Asking it to rate quality
+on a ten-point scale asks for a discrimination it doesn't have — you'd get a number that looks
+precise and means nothing. Scope the judge to what a small model can actually do.
 
-### "Tell me about the hardest bug you actually found and fixed."
+**Why a plain dict for the registry instead of classes?**
+There is exactly one behaviour: look up a config by tier and type. A dict does that. A class
+hierarchy would be solving a problem I don't have, and every future reader would have to walk
+it to learn what one `REGISTRY[(2, "coding")]` tells you at a glance.
 
-**Situation:** During eval testing, a translation query — "Translate 'Where is the nearest
-train station?' to Spanish" — came back as a Spanish sentence about not having GPS access, at
-*both* tiers I tried, on two completely different models.
-**Task:** Two different models failing identically pointed away from "one model is bad" and
-toward something shared upstream.
-**Action:** I traced the actual prompt each model received and found the culprit: my
-classifier's "rewrite this query to be clear and unambiguous" step had rewritten the query into
-`"where is the nearest train station in spanish translation"` — which deleted the word
-"translate" as an instruction and left something that reads exactly like a real navigation
-question.
-**Result:** Fixed it at the actual source — added explicit guidance in the classifier's system
-prompt to preserve the literal "Translate 'X' to Y" structure for translation-type queries,
-instead of patching the downstream answer prompt (which would have left the corrupted prompt
-in place for anything else that used it). Verified against multiple translation queries
-afterward.
+**Why measure active params rather than total params?**
+Several models here are Mixture-of-Experts — `gpt-oss-120b` is ~117B total but activates only
+~5.1B per token. Compute cost tracks active params. If I'd recorded 120, the savings metric
+would have been enormous and wrong *in my favour*, and it would have looked great, so nobody
+would have questioned it. A consequence I chose to show rather than hide: active params aren't
+monotonic with tier number, so tier 3 QA is genuinely *cheaper* than tier 2 QA.
 
-### "Tell me about a metrics/measurement bug — a time your own numbers lied to you."
+**Why does the savings metric allow negative numbers?**
+Because a cascade that escalates far enough really can cost more than one direct max-tier call
+— expert coding is 32B at tier 3 plus 55B at tier 4 against a 55B baseline, i.e. −58%. It was
+clamped at zero originally, which made the routing's worst case permanently invisible.
+Unclamping it immediately exposed a second bug: tier-2 summarization was a 70B dense model, more
+expensive than the tier-4 ceiling it was measured against. **The clamp had been hiding a real
+routing bug.**
 
-**Situation:** My eval harness reported `100% compute saved` on a query that had actually
-*failed* to produce any usable answer at all.
-**Task:** Figure out why "saved 100%" and "totally failed" were showing up together — those
-shouldn't both be true.
-**Action:** Traced it to how I recorded a `malformed_response` trace step — I'd defaulted its
-`active_params_b` to 0, same as a genuine provider outage. But a malformed response means the
-model *did* run and generate tokens — real compute was spent, the JSON just didn't parse. Only
-an actual 429/503 rejection (the model never ran) is legitimately free.
-**Result:** Fixed the trace-recording to charge real compute for a malformed response, same as
-any other real attempt. This is a good story because it shows you don't just trust a metric
-that looks good — you interrogate a number that looks *too* good.
+**Why an exact-match cache rather than a semantic one?**
+Semantic caching needs an embedding model and a vector store — a real dependency and a real
+change. Exact-match on a normalized string is a dict, it's honest about what it does, and it
+already removes the largest single win available (a repeat query costs *zero* calls, including
+the classifier every query otherwise pays for). It's marked in the code with its ceiling and its
+upgrade path.
 
-### "Tell me about hitting a real production-style constraint."
+---
 
-**Situation:** Mid-audit, live testing started returning `unavailable` for almost every
-OpenRouter-routed query, even ones that had worked minutes before.
-**Task:** Determine whether this was a bug in my code or an external condition.
-**Action:** Called an OpenRouter model directly outside the app and got the real answer: a
-`429 - Rate limit exceeded: free-models-per-day` error. OpenRouter caps unpaid accounts at 50
-free-model requests per day, account-wide — not per-model — and a day of active testing had
-exhausted it.
-**Result:** Not a code bug at all — and a good validation: my `ModelUnavailable` handling
-degraded correctly under a real, sustained, account-wide outage, not just a simulated one.
-Documented it as a known operational constraint rather than something to "fix" — anyone
-reproducing this project needs to know it.
+## Real bugs, STAR format
 
-## Anticipated interview questions and prepared answers
+### "Tell me about the hardest bug you found."
+
+**Situation.** Summarization queries were failing the judge almost every time — 0-1 out of 5 —
+in both the cascade and the always-max-tier baseline.
+
+**Task.** Both paths failing identically ruled out "the small model is bad at summarizing," so
+something upstream and shared was wrong.
+
+**Action.** My first diagnosis was the judge. Its rubric is "decide if the answer is correct,"
+which suits QA and coding but misfires on summarization, where the standard is faithfulness, not
+literal correctness. I added task-type-specific guidance to the judge's prompt. It helped
+slightly, **and I recorded that as the fix.** It was not the fix.
+
+Re-measuring later, summarization was still 1/5. So I stopped reading the judge's verdicts and
+read the actual answers. One said: *"I'm not aware of the current events in the stock market as
+my knowledge cutoff is December 2023."* That is not a bad summary — that is a model that was
+never given the text. The judge had been right every time.
+
+I printed what the classifier actually hands downstream:
+
+| Raw query | What the model received |
+|---|---|
+| `Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data...` | `Summarize the main points from the paragraph about the stock market.` |
+
+There is no paragraph. The `optimized_prompt` step — meant to rewrite queries for clarity — had
+**paraphrased away the payload**, leaving only a description of it.
+
+**Result.** The root cause is that prompt rewriting is only safe when the query is *purely an
+instruction*. Summarization and translation queries are instruction **plus payload**, and a
+paraphrase can discard the payload while still being a "clearer" sentence. So I fixed it
+structurally rather than with another prompt hint — content-bearing task types bypass the
+rewrite entirely. On the subset I could run that day, summarization went 1/5 → 4/5, QA 4/5 →
+5/5, and calibration error improved from 0.519 to 0.291. On the full benchmark afterwards,
+summarization reached 5/5.
+
+*Why this is the one to tell:* three separate lessons. I'd **documented a wrong root cause with
+confidence**, and a partial improvement is the best disguise a wrong diagnosis has. I'd been
+**reading the judge's opinion of the answer instead of the answer**, which said the problem in
+plain English from the first run. And I'd hit this same bug earlier with *translation*, patched
+that one instance, and never asked what else shared the mechanism.
+
+### "Tell me about a bug that looked real but wasn't."
+
+**Situation.** My first end-to-end cascade run failed outright — both tier 1 and tier 2 returned
+malformed JSON, so my retry-once parsing had failed twice in a row.
+
+**Task.** Determine whether the parsing logic was actually broken before touching it.
+
+**Action.** I isolated layer by layer instead of guessing: raw model call (clean JSON), the
+JSON-parsing helper alone (fine), the full provider-dispatch path (fine), the exact
+classify→optimize→answer chain three times (fine each time), then re-ran the original failing
+test with zero code changes.
+
+**Result.** It passed. It was never a bug — small models return malformed JSON roughly 10-15% of
+the time, and two independent ~12% events landing together is about a 1.4% coincidence I hit on
+run one. **The LLM-specific lesson: before fixing a failure, establish whether it's
+deterministic.** Everything downstream of a model call is probabilistic. Had I "fixed"
+`_extract_json` there, I'd have introduced a real bug chasing a phantom.
+
+The mirror image happened later and I used the same test: one specific model failed on *four
+out of four* different queries. Deterministic, one common factor — that one was real (a
+reasoning model wrapping its answer in a `<think>` block), and I found it in minutes because I
+knew which question to ask.
+
+### "Tell me about a time you were wrong about your own project."
+
+**Situation.** Late in the project I noticed my judge failing answers that were obviously fine.
+The clearest one: for *"A farmer has 17 sheep, all but 9 die, how many are left?"*, the model
+answered *"The remaining number of sheep is 9, which is less than the original number of 17"* —
+and the judge failed it with *"the answer does not state the remaining number of sheep."* It
+states it. It's the fourth word.
+
+**Task.** Work out whether the judge was wrong occasionally or wrong systematically.
+
+**Action.** I'd been reading the judge's verdicts as data about the *answers*. Reading them as
+data about the *judge*, the pattern was immediate: every false failure was about form, not fact
+— "doesn't show the calculation," "too simplistic," "lacks context." It was grading essays. The
+cause was my own prompt: *"You are a **strict** answer judge... decide if the answer is correct
+and **adequately addresses** the question."* "Strict" invites rejection, "adequately addresses"
+is undefined, so the model filled the gap with completeness-of-presentation. I replaced it with
+explicit pass/fail conditions and an instruction that style, length and missing working are
+out of scope.
+
+**Result — and this is the actual story.** With the judge no longer failing things for style, I
+re-ran my standard prompt set and one query came back *accepted* that never had before: *"what
+is the 47th digit after the decimal point of pi?"*, answer **7**. I had been using that exact
+question since my earliest testing as my canonical hallucination example — it's written up in
+my build log as *"the model answers 7 with confidence 10, and once the judge became mandatory
+it correctly caught it."*
+
+So I finally checked. **The 47th digit of pi is 7.** The model had been right the entire time.
+What I'd documented as "my judge correctly catching a hallucination" was my judge **rejecting a
+correct answer for not showing its working** — the exact bug I'd just fixed, sitting in my own
+documentation, being cited as evidence the system worked.
+
+*Three things I'd draw out of it:*
+
+1. **I never verified my own test case.** I chose that question *because* I assumed small models
+   get it wrong, then used the model's answer as evidence for the assumption that made me choose
+   it. Circular, and it survived the whole project because checking it took one line of Python
+   I never ran.
+2. **A component that fails safe still fails.** A judge that wrongly *rejects* looks
+   responsible — it produces cautious escalations, not visible errors. It was quietly spending
+   compute to replace correct answers, and every false rejection read as appropriate caution.
+3. **The conclusion survived because it had a measurement behind it, not just a story.** The
+   overconfidence finding the pi example was supporting is still true — but it's supported by
+   the ECE number, not the anecdote. If the anecdote had been my only evidence, I'd have had
+   nothing.
+
+*(If asked "why didn't you just quietly fix it?" — because the git history and the build log
+show the correction, and a project where nothing was ever wrong is a project where nothing was
+ever checked.)*
+
+### "Tell me about a time your own metrics lied to you."
+
+**Situation.** The eval harness reported `100% compute saved` on a query that had failed to
+produce any answer at all.
+
+**Task.** Work out why "saved everything" and "delivered nothing" were showing up together.
+
+**Action.** Traced it to how I recorded a `malformed_response` step — I'd defaulted its
+`active_params_b` to 0, the same as a genuine provider outage. But a malformed response means
+the model **did** run and burn tokens; only a 429/503 rejection, where the model never ran, is
+genuinely free.
+
+**Result.** Fixed the accounting to charge real compute for a malformed response. What makes
+this worth telling is that it's the *third* flattering-but-wrong number this metric pipeline
+produced — along with the near-miss of counting MoE models by total parameters, and the clamp
+that hid negative savings. None of them crashed. All made the system look better than it was.
+**A defensive default in a measurement path isn't defensive, it's a thumb on the scale**, and
+you have to interrogate good numbers at least as hard as bad ones because nobody investigates
+a result they like.
+
+### "Tell me about a production-style constraint you hit."
+
+**Situation.** Two different rate limits, same day. OpenRouter started returning `unavailable`
+for most queries; later a test script died outright on Groq.
+
+**Task.** Determine which was an external condition and which was my bug.
+
+**Action.** Calling OpenRouter directly gave the real answer: `429 - Rate limit exceeded:
+free-models-per-day`, capped at 50 requests per day **account-wide across every free model**.
+Not a bug — a real ceiling of building on free infrastructure.
+
+The Groq one *was* my bug, and an embarrassing one. I had `ModelUnavailable` handling
+specifically so a rate limit couldn't crash anything — but it lived in `call_model()`, and the
+classifier and judge call the shared `call_json()` directly, bypassing it. The answering path
+degraded gracefully while the classifier, which runs on **every single query**, could take down
+the whole app.
+
+**Result.** Moved the handling down into `call_json()`, where all three paths already go. While
+there I split the two limits by their actual behaviour: Groq's per-minute limit clears in
+seconds, so a transient 429 now waits briefly and retries and usually just succeeds; OpenRouter's
+daily cap survives that and correctly degrades to skipping the tier. **The transferable lesson:
+when you add error handling, grep every caller of the thing you're protecting.** "I handled
+that" was true of one path out of three, and the unprotected ones ran more often.
+
+---
+
+## Anticipated questions
 
 **Q: Walk me through what happens when I type a query into the UI.**
-A: [Use the 2-minute walkthrough above, said out loud, not read.]
+Use the 2-minute walkthrough — said, not recited.
 
-**Q: Why use an LLM to judge another LLM's answer? Isn't that circular?**
-A: It can be, and the judge shares the same class of bias — that's a real, documented
-limitation, not something I'm hiding. But scoped narrowly (binary pass/fail, not nuanced
-scoring) it's a useful signal, especially compared to trusting a model's own self-reported
-confidence, which I found empirically to be badly overconfident (see the calibration
-section). The judge is a second, independent inference — it's not perfect, but it catches
-things confidence alone misses, which I demonstrated directly: the same hallucinated wrong
-answer that got waved through at confidence 9-10 got correctly flagged once I made the judge
-mandatory instead of confidence-gated.
+**Q: Isn't using an LLM to judge another LLM circular?**
+Partly, yes, and the judge shares a class of bias with the model it's judging — that's a real
+limitation I document rather than hide. Scoped narrowly to binary pass/fail it's still a more
+useful signal than the alternative, which is trusting the model's own confidence — I measured
+that at ~0.98 stated against ~0.75 actual. But I'd add that the judge is the component I trust
+least, and I have a specific reason: I found it failing correct answers for stylistic reasons,
+and one of those false failures had been sitting in my own documentation for weeks as *proof
+the judge worked*. That's the story below.
 
-**Q: What's Expected Calibration Error, and why does it matter for this project?**
-A: It measures the gap between a model's stated confidence and its actual accuracy. I
-collected (confidence, judge-verdict) pairs across live eval runs and found that in the
-top confidence bucket (self-rated 8-10 out of 10), actual accuracy was only around 61% — an
-ECE of 0.405, where 0 would be perfect calibration. That's not a guess, it's a measured
-number from my own eval harness, and it's exactly why the system doesn't trust self-reported
-confidence alone.
+**Q: What's Expected Calibration Error and why does it matter here?**
+It measures the gap between stated confidence and actual accuracy: bucket every
+(confidence, verdict) pair by confidence, compare each bucket's mean confidence to its actual
+pass rate, take the weighted mean absolute difference. 0 is perfect. Mine went 0.52 → 0.23 →
+0.13 as I fixed real bugs; the top bucket currently claims 0.95 and delivers 0.82. It's computed
+by my own harness from live runs, and it's why the router doesn't trust self-reported confidence.
 
-**Q: Why not just always use the biggest model? Isn't that simpler and safer?**
-A: That's literally the baseline I compare against in my eval harness — an always-tier-4
-approach, no classification, no escalation. The cascade matched its pass rate while using
-~64% less active-parameter compute on average. "Simpler" isn't free if it's burning 3-10x the
-compute for queries that a small model already answers correctly.
+**The part I'd volunteer without being asked:** this ECE measures confidence against my
+*judge's* verdicts, not against ground truth. So when my judge was over-strict and failing
+correct answers, it inflated the apparent overconfidence — a real chunk of that 0.23 → 0.13
+improvement was the judge getting less wrong, not the models getting better calibrated. The
+metric is only as good as its referee. That's a genuine limitation of the whole
+LLM-as-judge approach, and I'd rather state it than have someone find it.
 
-**Q: What are the actual limitations of this system? Don't sugarcoat it.**
-A: Three real ones. First, OpenRouter's free tier hard-caps at 50 requests/day account-wide,
-which I hit mid-testing — this system as-is doesn't scale past that without a paid tier.
-Second, the judge is a small model and, even with task-aware prompting, still occasionally
-misjudges subjective tasks like summarization — there's a real ceiling to what a small judge
-model can evaluate well. Third, the "$ saved" metric is explicitly illustrative — these are
-free models, so there's no real bill to compare against; it's a documented approximation, not
-a real billing reconciliation.
+**Q: Why not just always use the biggest model? Simpler and safer.**
+That's literally the baseline in my eval harness — always tier 4, raw query, no classification,
+no escalation. The cascade uses about 77% less active-parameter compute. "Simpler" isn't free
+if it burns 3-10× the compute on queries an 8B model already answers correctly. Worth adding
+honestly: the cascade is also *slower* on escalation, since three sequential round trips beats
+one, so it's a cost/latency tradeoff rather than a free win.
 
-**Q: How would you scale this to a real production system?**
-A: A few directions I'd take, in priority order: (1) a semantic cache in front of the
-classifier — a cache hit should skip routing and the LLM call entirely, which is standard
-production guidance for this pattern; (2) move from static confidence thresholds to
-thresholds tuned per task type from logged calibration data, since I already have the
-infrastructure to collect (confidence, verdict) pairs; (3) add retry/backoff and multi-key
-rotation to handle the free-tier rate-limit ceiling I hit; (4) persist every query's trace
-(SQLite or similar) instead of only in-session state, so routing quality can be monitored
-over time, not just per-session.
+**Q: What are the real limitations? Don't sugarcoat it.**
+Four. **(1)** OpenRouter's free tier caps unpaid accounts at 50 requests/day account-wide; I hit
+it mid-testing and it means the full cross-provider eval, including the baseline arm, can only be
+run once a day. **(2)** The judge is a small model and still occasionally misjudges subjective
+tasks even with task-aware prompting — there's a real ceiling there. **(3)** The dollar figure
+is explicitly illustrative; these are free models with no bill to reconcile against. **(4)** The
+benchmark is 25 hand-written queries I chose myself, which is enough to catch bugs and not
+enough to make a strong statistical claim.
+
+**Q: How do you know the savings number isn't optimistic marketing math?**
+Because I built the harness specifically to make it falsifiable, and because it has *caught* me
+being wrong three times — the MoE parameter count, the malformed-response accounting, and the
+clamp hiding negative savings. A metric that has never contradicted you isn't being checked. I'd
+rather present a number with its failure modes attached than a rounder one without.
+
+**Q: How would you scale this to production?**
+In priority order: **(1)** a semantic cache in front of the classifier, since a cache hit should
+skip routing and inference entirely — the current exact-match version already shows the win;
+**(2)** replace the static confidence thresholds with per-task-type thresholds tuned from logged
+calibration data, since I'm already collecting the (confidence, verdict) pairs and nothing
+consumes them yet; **(3)** persist traces to a real store instead of session state, so routing
+quality is monitorable over time rather than per-session; **(4)** multi-key rotation and proper
+backoff for the rate-limit ceiling. And honestly, **(5)** replace the LLM judge for objective
+task types with real ground-truth evaluation where it exists — for coding that's running the
+tests, which beats any judge model.
 
 **Q: Why Groq for some models and OpenRouter for others?**
-A: Different model catalogs — Groq hosts a specific set of fast-inference models for free;
-OpenRouter aggregates many providers' free-tier models under one OpenAI-compatible API. I
-built a small provider-abstraction layer (`llm_client.py`) so the rest of the system — the
-registry, the cascade, the judge — never has to know or care which provider a given model
-lives on; it just calls `call_model()` and gets an answer back.
+Different catalogs. Groq hosts a specific set of fast-inference models free; OpenRouter
+aggregates many providers' free-tier models behind one OpenAI-compatible API. The abstraction in
+`llm_client.py` means nothing downstream knows which is which — adding a third provider is one
+function there and no changes anywhere else. It also caught me out once: "OpenAI-compatible"
+describes the HTTP contract, not the Python exception hierarchy, so the two SDKs raise entirely
+separate `APIStatusError` classes and you have to catch both.
 
-**Q: What was the trickiest part of the whole project?**
-A: Getting the escalation loop (`cascade.py`) right — juggling three independent failure
-modes at once (a provider being genuinely down, a model returning unparseable JSON, and a
-model returning a parseable but wrong answer) and making sure each one is handled differently
-rather than collapsed into one generic "failed" bucket, since conflating them would mean an
-outage gets mistaken for a bad answer, or vice versa.
+**Q: What was the trickiest part?**
+The cascade loop, because of three independent failure modes that must stay distinct: a provider
+being down, a model returning unparseable output, and a model returning a parseable but wrong
+answer. Collapsing them into one "failed" bucket means an outage gets mistaken for a bad answer
+— and that's not hypothetical, it's exactly the bug that produced "100% compute saved" on a
+total failure.
 
-**Q: If you had one more week, what would you build next?**
-A: The semantic cache and an A/B comparison view in the UI (cascade vs. always-biggest-model,
-side by side, live) — both flagged as valuable during research but deliberately deferred
-because they touch core routing/UI more invasively than I wanted to rush in the same pass as
-everything else.
+**Q: If you had one more week?**
+The semantic cache and an A/B view in the UI showing cascade against always-max-tier side by
+side and live. The harness already computes that comparison offline; putting it in front of a
+user is what makes the argument without needing to read a JSON file.
 
-**Q: How do you know your compute-savings number isn't just optimistic marketing math?**
-A: Because I built an eval harness specifically to make that claim checkable instead of
-asserted — it runs the same 25 queries through both the cascade and a naive always-biggest
-baseline, judges both independently, and reports the real pass-rate delta alongside the
-compute-saved percentage. I'd rather show "68% pass rate at 64% less compute" than just say
-"it saves compute" with nothing to back it.
+**Q: What would you do differently if you started over?**
+Build the eval harness first. I built it after the system worked, and it found five real bugs in
+its first sitting — including two crashes that no amount of manual single-query testing had
+surfaced, because they needed 25 queries across many models to hit. I'd been testing by typing
+things into a UI and eyeballing whether the answer looked fine, which is exactly as rigorous as
+it sounds.
 
-**Q: What would you say is your single best "shows how you actually work" story from this
-project?**
-A: Probably the translation bug — not because it was the hardest bug technically, but because
-of how I found it: two different models failed identically on the same query, which is a
-strong signal the bug isn't in either model but in something they both received. That's a
-debugging instinct (blame the shared input before blaming the two independent things that
-both broke the same way), not a lucky guess.
+**Q: This is all free-tier. Does any of it transfer to a real system?**
+The economics transfer directly — free models still have the compute-cost *ratios* the routing
+exploits, and the active-param accounting is the same arithmetic you'd do against a price sheet.
+What doesn't transfer is reliability engineering: paid tiers don't hand you a 50-request daily
+cap, so the aggressive `ModelUnavailable` degradation matters less. Though it did mean I tested
+graceful degradation under genuine sustained outages rather than mocked ones, which most side
+projects never do.
 
-## Quick facts to have on the tip of your tongue
+---
 
-- 5 task types, 4 tiers, 20 registered (tier, type) model configurations, all verified live
-  before being hardcoded.
-- Escalation ceiling: easy/medium → tier 2, hard → tier 3, expert → tier 4.
-- Judge fires on every answer (not just ambiguous confidence) — a deliberate change made after
-  finding confidence was almost always 9-10 regardless of correctness.
-- ECE of 0.405 in the high-confidence bucket, ~61% actual accuracy where confidence implied
-  ~90%+.
-- OpenRouter's free-tier daily cap: 50 requests/account/day unpaid, 1000/day with $10 credit.
-- Zero paid APIs, zero GPUs — Groq's free tier + OpenRouter's `:free` model catalog only.
+## Quick facts
+
+- 5 task types × 4 tiers = 20 registered model configurations, all validated against both
+  providers' live catalogs by `checks/check_model_ids.py` (which caught one delisted model ID
+  mid-project).
+- Escalation ceilings: easy/medium → tier 2, hard → tier 3, expert → tier 4.
+- The judge fires on **every** answer — a change made after measuring confidence at 9-10
+  regardless of correctness.
+- ECE improved 0.52 → 0.23 → 0.13 across bug fixes; top confidence bucket claims 0.95,
+  delivers 0.82.
+- **76.6%** average active-parameter compute saved versus an always-tier-4 baseline.
+- **72%** pass rate overall, **90%** (18/20) excluding queries where no model was reachable;
+  13 of 20 answered queries resolved at tier 1.
+- Free-tier ceilings: OpenRouter 50 requests/day account-wide (1000/day with a $10 credit);
+  Groq 30 requests/minute.
+- 11 self-checks, 5 of which run in CI without needing API keys (the rest need live API access).
+- Zero paid APIs, zero GPUs.
+
+## Things to be honest about if pushed
+
+- The 25-query benchmark is small and self-authored. It is a bug-finding instrument first and a
+  statistical claim a distant second.
+- The judge is the weakest component and the least rigorous part of the design.
+- Several results in this repo have been wrong before they were right, and the git history shows
+  it. That's the intended impression, not a thing to explain away.

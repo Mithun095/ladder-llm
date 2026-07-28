@@ -1,28 +1,18 @@
 {
   "num_queries": 25,
-  "cascade_pass_rate": 0.68,
-  "baseline_pass_rate": 0.68,
-  "avg_compute_saved_pct": 63.92727272727274,
-  "total_dollar_saved_illustrative": 0.0053,
-  "confidence_calibration_ece": 0.405,
+  "num_answered": 20,
+  "cascade_pass_rate": 0.72,
+  "baseline_ran": 0,
+  "baseline_pass_rate": null,
+  "avg_compute_saved_pct": 76.62727272727275,
+  "total_dollar_saved_illustrative": 0.0051,
+  "confidence_calibration_ece": 0.131,
   "reliability_table": [
     {
-      "bin": "0.0-0.2",
-      "count": 1,
-      "avg_confidence": 0.1111111111111111,
-      "accuracy": 0.0
-    },
-    {
-      "bin": "0.6-0.8",
-      "count": 7,
-      "avg_confidence": 0.7777777777777778,
-      "accuracy": 0.14285714285714285
-    },
-    {
       "bin": "0.8-1.0",
-      "count": 26,
-      "avg_confidence": 0.9700854700854701,
-      "accuracy": 0.6153846153846154
+      "count": 22,
+      "avg_confidence": 0.9494949494949495,
+      "accuracy": 0.8181818181818182
     }
   ],
   "per_query": [
@@ -31,7 +21,8 @@
       "type": "qa",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
+      "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
@@ -39,7 +30,8 @@
       "type": "qa",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
+      "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
@@ -47,7 +39,8 @@
       "type": "qa",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
+      "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
@@ -55,7 +48,8 @@
       "type": "qa",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
+      "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
@@ -63,128 +57,144 @@
       "type": "reasoning",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
+      "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
       "query": "Write a function to reverse a linked list in O(1) space",
       "type": "coding",
-      "tier_used": 2,
-      "cascade_passed": true,
-      "baseline_passed": true,
-      "compute_saved_pct": 74.5
+      "tier_used": 3,
+      "cascade_passed": false,
+      "baseline_passed": false,
+      "answered": false,
+      "compute_saved_pct": null
     },
     {
       "query": "Write a Python function that checks if a string is a palindrome",
       "type": "coding",
-      "tier_used": 1,
-      "cascade_passed": true,
-      "baseline_passed": true,
-      "compute_saved_pct": 87.3
+      "tier_used": 2,
+      "cascade_passed": false,
+      "baseline_passed": false,
+      "answered": false,
+      "compute_saved_pct": null
     },
     {
       "query": "Implement binary search in Python",
       "type": "coding",
-      "tier_used": 1,
-      "cascade_passed": true,
+      "tier_used": 2,
+      "cascade_passed": false,
       "baseline_passed": false,
-      "compute_saved_pct": 87.3
+      "answered": false,
+      "compute_saved_pct": null
     },
     {
       "query": "Write a function to find the longest common subsequence of two strings",
       "type": "coding",
       "tier_used": 2,
-      "cascade_passed": true,
-      "baseline_passed": true,
-      "compute_saved_pct": 87.3
+      "cascade_passed": false,
+      "baseline_passed": false,
+      "answered": false,
+      "compute_saved_pct": null
     },
     {
       "query": "Write a function that merges two sorted lists into one sorted list",
       "type": "coding",
-      "tier_used": 1,
-      "cascade_passed": true,
-      "baseline_passed": true,
-      "compute_saved_pct": 87.3
+      "tier_used": 2,
+      "cascade_passed": false,
+      "baseline_passed": false,
+      "answered": false,
+      "compute_saved_pct": null
     },
     {
       "query": "Prove that the square root of 2 is irrational",
       "type": "reasoning",
-      "tier_used": 3,
+      "tier_used": 2,
       "cascade_passed": true,
-      "baseline_passed": true,
-      "compute_saved_pct": 78.2
+      "baseline_passed": false,
+      "answered": true,
+      "compute_saved_pct": 50.9
     },
     {
       "query": "If all bloops are razzies and all razzies are lazzies, are all bloops lazzies?",
       "type": "reasoning",
-      "tier_used": 3,
+      "tier_used": 2,
       "cascade_passed": true,
       "baseline_passed": false,
-      "compute_saved_pct": 78.2
+      "answered": true,
+      "compute_saved_pct": 36.4
     },
     {
       "query": "A train leaves station A at 60mph, another leaves station B at 40mph, 200 miles apart, heading toward each other. When do they meet?",
-      "type": "reasoning",
+      "type": "qa",
       "tier_used": 1,
       "cascade_passed": true,
       "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
       "query": "Is the statement 'this sentence is false' true or false?",
-      "type": "reasoning",
-      "tier_used": 4,
-      "cascade_passed": false,
-      "baseline_passed": true,
-      "compute_saved_pct": 0.0
+      "type": "qa",
+      "tier_used": 3,
+      "cascade_passed": true,
+      "baseline_passed": false,
+      "answered": true,
+      "compute_saved_pct": 90.7
     },
     {
       "query": "What is 17 * 23?",
       "type": "reasoning",
       "tier_used": 2,
-      "cascade_passed": false,
-      "baseline_passed": true,
-      "compute_saved_pct": 100.0
+      "cascade_passed": true,
+      "baseline_passed": false,
+      "answered": true,
+      "compute_saved_pct": 36.4
     },
     {
       "query": "Summarize: The quick brown fox jumps over the lazy dog repeatedly, day after day, until eventually the dog decides to move to a different yard entirely.",
       "type": "summarization",
-      "tier_used": 2,
-      "cascade_passed": false,
+      "tier_used": 1,
+      "cascade_passed": true,
       "baseline_passed": false,
-      "compute_saved_pct": 0.0
+      "answered": true,
+      "compute_saved_pct": 85.5
     },
     {
       "query": "Summarize in one sentence: Photosynthesis is the process by which green plants use sunlight to synthesize foods from carbon dioxide and water, generating oxygen as a byproduct.",
       "type": "summarization",
-      "tier_used": 2,
-      "cascade_passed": false,
+      "tier_used": 1,
+      "cascade_passed": true,
       "baseline_passed": false,
-      "compute_saved_pct": 0.0
+      "answered": true,
+      "compute_saved_pct": 85.5
     },
     {
       "query": "Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data, with tech stocks leading the decline before a late recovery on Friday.",
       "type": "summarization",
-      "tier_used": 2,
-      "cascade_passed": false,
+      "tier_used": 1,
+      "cascade_passed": true,
       "baseline_passed": false,
-      "compute_saved_pct": 0.0
+      "answered": true,
+      "compute_saved_pct": 85.5
     },
     {
       "query": "Give a 2 sentence summary: The history of Rome spans over a thousand years, from its founding as a small city-state to its rise as one of the largest empires in ancient history, before its eventual decline.",
       "type": "summarization",
       "tier_used": 2,
-      "cascade_passed": false,
-      "baseline_passed": true,
-      "compute_saved_pct": 0.0
+      "cascade_passed": true,
+      "baseline_passed": false,
+      "answered": true,
+      "compute_saved_pct": 36.4
     },
     {
       "query": "Summarize: Regular exercise has been shown to improve cardiovascular health, boost mental well-being, aid in weight management, and increase overall longevity.",
       "type": "summarization",
-      "tier_used": 2,
-      "cascade_passed": false,
+      "tier_used": 1,
+      "cascade_passed": true,
       "baseline_passed": false,
-      "compute_saved_pct": 0.0
+      "answered": true,
+      "compute_saved_pct": 85.5
     },
     {
       "query": "Translate 'good morning' to French",
@@ -192,14 +202,16 @@
       "tier_used": 2,
       "cascade_passed": false,
       "baseline_passed": false,
-      "compute_saved_pct": 78.2
+      "answered": true,
+      "compute_saved_pct": 85.5
     },
     {
       "query": "Translate 'Where is the nearest train station?' to Spanish",
       "type": "translation",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
+      "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
@@ -207,24 +219,28 @@
       "type": "translation",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
+      "baseline_passed": false,
+      "answered": true,
       "compute_saved_pct": 85.5
     },
     {
       "query": "Translate 'I would like a cup of coffee, please' to Italian",
       "type": "translation",
-      "tier_used": 2,
+      "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": true,
-      "compute_saved_pct": 78.2
+      "baseline_passed": false,
+      "answered": true,
+      "compute_saved_pct": 85.5
     },
     {
       "query": "Translate 'Good night, sleep well' to Japanese",
       "type": "translation",
       "tier_used": 2,
-      "cascade_passed": true,
-      "baseline_passed": true,
-      "compute_saved_pct": 78.2
+      "cascade_passed": false,
+      "baseline_passed": false,
+      "answered": true,
+      "compute_saved_pct": 85.5
     }
-  ]
+  ],
+  "skipped": []
 }

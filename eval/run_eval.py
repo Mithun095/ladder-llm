@@ -26,6 +26,7 @@ def run_baseline(query: str, task_type: str):
 def main():
     cascade_pass = 0
     baseline_pass = 0
+    baseline_ran = 0
     answered_count = 0
     total_saved_pct = 0.0
     total_dollar_saved = 0.0
@@ -57,9 +58,13 @@ def main():
                 total_saved_pct += saved_pct
                 total_dollar_saved += dollar_saved
 
+            # `None` means the baseline model was unavailable, not that it answered wrongly.
+            # Scoring those as failures would credit the cascade for a provider outage.
             baseline = run_baseline(query, result.type)
             baseline_ok = bool(baseline and baseline["passed"])
-            baseline_pass += baseline_ok
+            if baseline is not None:
+                baseline_ran += 1
+                baseline_pass += baseline_ok
 
             per_query_rows.append({
                 "query": query,
@@ -71,8 +76,9 @@ def main():
                 "compute_saved_pct": round(saved_pct, 1) if answered else None,
             })
             print(f"[{i}/{len(BENCHMARK_QUERIES)}] {result.type:14s} tier={result.tier_used} "
-                  f"cascade={'pass' if cascade_ok else 'fail'} baseline={'pass' if baseline_ok else 'fail'} "
-                  f"saved={saved_pct:.0f}%")
+                  f"cascade={'pass' if cascade_ok else 'fail'} "
+                  f"baseline={'pass' if baseline_ok else ('fail' if baseline is not None else 'n/a')} "
+                  f"saved={f'{saved_pct:.0f}%' if answered else 'n/a (no answer)'}")
         except Exception as e:
             # One unexpected failure (a new provider quirk we haven't hardened against yet)
             # shouldn't throw away every query already computed in this sweep.
@@ -89,7 +95,8 @@ def main():
         "num_queries": n,
         "num_answered": answered_count,
         "cascade_pass_rate": cascade_pass / n,
-        "baseline_pass_rate": baseline_pass / n,
+        "baseline_ran": baseline_ran,
+        "baseline_pass_rate": baseline_pass / baseline_ran if baseline_ran else None,
         "avg_compute_saved_pct": total_saved_pct / answered_count if answered_count else 0.0,
         "total_dollar_saved_illustrative": round(total_dollar_saved, 4),
         "confidence_calibration_ece": round(ece, 3),
@@ -100,7 +107,12 @@ def main():
 
     print("\n=== Summary ===")
     print(f"Cascade pass rate:              {summary['cascade_pass_rate'] * 100:.1f}%")
-    print(f"Baseline (tier {MAX_TIER}) pass rate:      {summary['baseline_pass_rate'] * 100:.1f}%")
+    if baseline_ran:
+        print(f"Baseline (tier {MAX_TIER}) pass rate:      {summary['baseline_pass_rate'] * 100:.1f}% "
+              f"(over the {baseline_ran} queries where the tier-{MAX_TIER} model was reachable)")
+    else:
+        print(f"Baseline (tier {MAX_TIER}) pass rate:      n/a — the tier-{MAX_TIER} model was "
+              f"unavailable for every query, so there is no comparison to make this run.")
     print(f"Avg compute saved:              {summary['avg_compute_saved_pct']:.1f}% (over the {answered_count} queries that produced an answer)")
     print(f"Illustrative $ saved:           ${summary['total_dollar_saved_illustrative']:.4f} across {n} queries")
     print(f"Confidence ECE:                 {summary['confidence_calibration_ece']:.3f} "

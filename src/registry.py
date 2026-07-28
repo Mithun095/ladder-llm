@@ -37,7 +37,10 @@ REGISTRY: dict[tuple[int, str], ModelConfig] = {
     (2, "translation"): ModelConfig("openrouter", "google/gemma-4-26b-a4b-it:free", 4),
 
     (3, "qa"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1),
-    (3, "coding"): ModelConfig("openrouter", "poolside/laguna-m.1:free", 32),
+    # Was poolside/laguna-m.1:free — delisted from OpenRouter's catalog mid-project and started
+    # returning 404 "No endpoints found". Caught by checks/check_model_ids.py, which is why
+    # that check validates the registry instead of just printing the catalog.
+    (3, "coding"): ModelConfig("openrouter", "poolside/laguna-s-2.1:free", 14),
     (3, "reasoning"): ModelConfig("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", 12),
     (3, "summarization"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1),
     (3, "translation"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1),

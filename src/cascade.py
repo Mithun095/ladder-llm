@@ -25,9 +25,10 @@ STARTING_TIER = {"easy": 1, "medium": 1, "hard": 2, "expert": 3}
 CEILING_TIER = {"easy": 2, "medium": 2, "hard": 3, "expert": 4}
 
 # Live testing showed self-reported confidence landing at 9-10 on every call regardless of
-# answer correctness (including a hallucinated answer to a pi-digit question) — the exact
-# overconfidence failure mode documented in BUILD-LOG.md. Disabling the fast-accept/
-# fast-escalate shortcuts and always firing the judge is the documented fallback for it.
+# answer correctness — measured later as an ECE of 0.23-0.52, with the top confidence bucket
+# claiming ~0.98 and delivering ~0.75. The ambiguous 5-7 band the fast paths depend on is
+# never reached in practice, so both shortcuts are disabled and the judge fires on every
+# answer. Kept behind a flag rather than deleted: see BUILD-LOG.md #7.
 JUDGE_ALWAYS = True
 
 # ponytail: exact-match in-process cache — normalized whitespace/case, nothing smarter.

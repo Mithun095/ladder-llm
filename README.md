@@ -1,146 +1,265 @@
 # LadderLLM
 
-**Adaptive multi-tier LLM cascade router.** Every query starts at the cheapest model that
-could plausibly answer it, and only escalates to a bigger one when a judge model confirms the
-cheap answer actually failed. Runs entirely on free-tier APIs (Groq + OpenRouter) — no GPU, no
-paid credits.
+**An adaptive multi-tier LLM cascade router.** Every query starts at the cheapest model that
+could plausibly answer it, and escalates to a bigger one only when a judge model confirms the
+cheap answer actually failed. Runs entirely on free-tier APIs — no GPU, no paid credits.
 
 [![checks](https://github.com/Mithun095/ladder-llm/actions/workflows/checks.yml/badge.svg)](https://github.com/Mithun095/ladder-llm/actions/workflows/checks.yml)
 
+---
+
 ## Why
 
-Every LLM query today gets routed to one model chosen upfront — usually the largest one "just
-in case." A question like "what is a closure in Python?" doesn't need a 550B-parameter
-reasoning model. LadderLLM classifies each query by difficulty and task type, starts at the
-smallest tier that could plausibly handle it, and escalates only when a judge model says the
-cheap answer genuinely isn't good enough.
+Almost every LLM application picks one model up front and sends everything to it — usually the
+biggest one, because that's the safe default. Most queries don't need it. *"What is the capital
+of Australia?"* is answered correctly by an 8B model in under a second; routing it to a 550B
+model burns roughly 7× the compute for the same answer.
 
-## Demo
+A **cascade router** starts each query at the cheapest model that could plausibly handle it,
+checks whether the answer is actually good, and escalates only when it isn't — so you pay
+big-model prices only for the queries that genuinely need a big model. That's the idea behind
+[FrugalGPT](https://arxiv.org/abs/2305.05176) and [RouteLLM](https://arxiv.org/abs/2406.18665).
+LadderLLM implements it on entirely free infrastructure, and ships an eval harness so the
+savings claim is **measured rather than asserted**.
 
-**A coding query, resolved at tier 1 (cheapest tier), 87% compute saved vs. always using the biggest model:**
-
-![Coding query resolved at tier 1](output_images/Screenshot%20From%202026-07-28%2017-04-45.png)
-
-**A general-knowledge query, also resolved at tier 1, judge-approved:**
-
-![QA query resolved at tier 1](output_images/Screenshot%20From%202026-07-28%2017-41-49.png)
-
-**A real bug, caught live while testing, not by any automated check** — a translation request
-came back as a Google Maps disclaimer instead of a translation. Root-caused to the
-classifier's prompt-rewrite step silently deleting the word "translate." Full debugging story
-in [`BUILD-LOG.md`](BUILD-LOG.md):
-
-![Translation bug caught during testing](output_images/Screenshot%20From%202026-07-28%2017-46-28.png)
-
-## Architecture
+## How it works
 
 ```mermaid
 flowchart TD
-    Q[User query] --> CL["Classifier (llama-3.1-8b-instant)<br/>difficulty x type + prompt rewrite"]
-    CL --> REG["Registry lookup<br/>tier x type -> specific model"]
-    REG --> M["Call model at current tier<br/>answer + self-rated confidence"]
-    M -->|"ModelUnavailable (429/503)"| SKIP["Log tier unavailable"]
+    Q[User query] --> C{Exact-match<br/>cache hit?}
+    C -->|yes| OUT
+    C -->|no| CL["<b>Classifier</b> — llama-3.1-8b-instant<br/>difficulty × task type"]
+    CL --> RW{"Query carries<br/>a payload?"}
+    RW -->|"summarization / translation"| RAW["Send query verbatim<br/><i>rewriting would delete the payload</i>"]
+    RW -->|"everything else"| OPT["Send rewritten prompt"]
+    RAW --> REG
+    OPT --> REG["<b>Registry</b> lookup<br/>(tier, type) → model"]
+    REG --> M["<b>Call model</b> at current tier<br/>answer + self-rated confidence"]
+    M -->|"429 / 503"| SKIP["log <i>unavailable</i><br/>(no compute charged)"]
+    M -->|"unparseable output"| BAD["log <i>malformed_response</i><br/>(compute IS charged)"]
+    M -->|answer| J["<b>Judge</b> — binary pass/fail<br/>task-type-aware rubric"]
+    J -->|pass| ACC["Accept"]
+    J -->|fail| ESC
     SKIP --> ESC
-    M -->|"answer"| J["Judge (llama-3.1-8b-instant)<br/>pass / fail, task-type-aware rubric"]
-    J -->|pass| ACC["Accept answer"]
-    J -->|fail| ESC{"Tier < ceiling?"}
+    BAD --> ESC{"Tier &lt; ceiling?"}
     ESC -->|yes| M
-    ESC -->|no| FAIL["Return best answer found,<br/>flagged best-effort"]
-    ACC --> FMT["Formatter + Metrics<br/>compute saved, $ saved"]
-    FAIL --> FMT
-    FMT --> UI["Streamlit UI<br/>answer + live routing trace"]
+    ESC -->|no| FAIL["Return best answer found"]
+    ACC --> MET["<b>Metrics</b><br/>active params burned vs. max-tier baseline"]
+    FAIL --> MET
+    MET --> OUT["<b>Streamlit UI</b><br/>answer + routing trace + cost"]
 ```
 
-Escalation ceiling depends on classified difficulty — easy/medium start at tier 1 (ceiling
-tier 2), hard starts at tier 2 (ceiling tier 3), expert starts at tier 3 (ceiling tier 4).
-Self-reported confidence alone turned out to be unreliable in testing (see below), so the
-judge currently fires on every call rather than only on borderline confidence scores.
+**Two axes, not one.** Task *type* decides which model is good at the work — a coding-specialised
+7B beats a general 8B at writing code, and that ranking doesn't transfer to translation.
+*Difficulty* decides how far up the ladder to start, and how far it's allowed to climb:
+
+| difficulty | starts at | ceiling |
+|---|---|---|
+| easy / medium | tier 1 | tier 2 |
+| hard | tier 2 | tier 3 |
+| expert | tier 3 | tier 4 |
+
+**Three failure modes, kept distinct.** Conflating these produces wrong answers *and* wrong
+metrics — a provider outage must never be read as a bad answer:
+
+| trace status | meaning | compute charged? |
+|---|---|---|
+| `accepted` | judge passed it | yes |
+| `judged_fail` | model answered, judge rejected it → escalate | yes |
+| `malformed_response` | model ran, output wouldn't parse → escalate | **yes** — tokens were burned |
+| `unavailable` | provider returned 429/503, model never ran → skip tier | **no** |
+
+**Confidence is collected but not trusted.** The original design fast-accepted on self-reported
+confidence ≥8 and only paid for a judge in the ambiguous 5-7 band. Measurement killed it:
+confidence came back 9-10 on *every* call, on correct and wrong answers alike, so the ambiguous
+band was never reached and the judge never fired. The judge now runs on every answer, and
+confidence survives only as the input to the calibration metric. The original code is still
+there behind a flag — [`DEVLOG.md`](DEVLOG.md) explains why.
 
 ## Model grid
 
-All 20 model IDs verified live against Groq's and OpenRouter's model-list endpoints before
-being hardcoded (`checks/discover_models.py`). Active params = active parameters per token,
-not total — matters for MoE models like `gpt-oss-120b` (~117B total, ~5.1B active).
+All 20 entries are validated against both providers' **live** catalogs by
+`checks/check_model_ids.py` — which earned its keep by catching a model that got delisted
+mid-project. Sizes are *active* parameters per token, not total, which matters for
+Mixture-of-Experts models like `gpt-oss-120b` (~117B total, ~5.1B active).
 
 | Tier | QA | Coding | Reasoning | Summarization | Translation |
 |---|---|---|---|---|---|
 | **1 — Nano** | Groq `llama-3.1-8b-instant` (8B) | OR `cohere/north-mini-code:free` (~7B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) |
-| **2 — Small** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-xs-2.1:free` (~7B) | Groq `qwen/qwen3.6-27b` (27B) | Groq `llama-3.3-70b-versatile` (70B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
-| **3 — Large** | Groq `gpt-oss-120b` (5.1B active) | OR `poolside/laguna-m.1:free` (~32B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
+| **2 — Small** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-xs-2.1:free` (~7B) | Groq `qwen/qwen3.6-27b` (27B) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
+| **3 — Large** | Groq `gpt-oss-120b` (5.1B active) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
 | **4 — Max** | OR `nemotron-3-ultra-550b-a55b:free` (55B active) | same | same | same | same |
 
 *(OR = OpenRouter, all `:free`)*
 
+Note that tier 3 QA is **cheaper** than tier 2 QA in active params. That isn't a mistake — it's
+the honest result of ranking tiers by capability while measuring them by compute, and it's the
+whole reason the registry tracks active rather than total parameters.
+
+## Demo
+
+**A coding query resolved at tier 1 — the cheapest model handled it, 87% compute saved:**
+
+![Coding query resolved at tier 1](output_images/Screenshot%20From%202026-07-28%2017-04-45.png)
+
+**A general-knowledge query, also resolved at tier 1 and judge-approved:**
+
+![QA query resolved at tier 1](output_images/Screenshot%20From%202026-07-28%2017-41-49.png)
+
+Escalation is the interesting case. *"A farmer has 17 sheep. All but 9 die. How many are left?"*
+is a trick question the 8B model at tier 1 reliably fails — an actual trace:
+
+```
+tier 1  llama-3.1-8b-instant  → judged_fail  (confidence 10)
+        judge: "The answer is given as 8, but 'all but 9 die' leaves 9."
+tier 2  qwen/qwen3.6-27b      → accepted     (confidence 10)
+        judge: "The answer is factually correct and directly addresses
+                the number of sheep remaining."
+        answer: 9
+```
+
+The cheap model was confident and wrong, the judge caught it, and the cascade escalated exactly
+once and stopped — the whole thesis of the project in one trace. Note tier 1's confidence: **10,
+on a wrong answer.** That's the calibration problem, and the reason a separate judge exists.
+
+Run it a few times and tier 1 will sometimes fail with `malformed_response` instead of
+`judged_fail` — small models return unparseable JSON perhaps 10-15% of the time. Both are
+escalation triggers; only one of them charges compute for the attempt.
+
+### Prompts to try
+
+Each of these exercises a different path. All were verified end to end; the routing decision is
+made per-run by a model, so tiers can vary by one between runs.
+
+| Prompt | Exercises | Expected |
+|---|---|---|
+| `What is the capital of Australia?` | cheapest path | tier 1, accepted, ~85% saved, <1s |
+| `A farmer has 17 sheep. All but 9 die. How many sheep are left?` | **escalation** | tier 1 judged_fail → tier 2 accepted, answer `9` |
+| `What is 17 * 23?` | reasoning | accepted, answer `391` |
+| `Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data, with tech stocks leading the decline before a late recovery on Friday.` | **payload preservation** | summarizes *that text* — not general stock-market commentary |
+| `Translate 'Where is the nearest train station?' to Spanish` | payload preservation | `¿Dónde está la estación de tren más cercana?` — translated, not answered |
+| *(submit any of the above twice)* | **cache** | second run: green cache banner, 0 model calls, 0.0s |
+| `Write a Python function that checks if a string is a palindrome` | coding — **needs OpenRouter quota** | tiers 1-3 for coding are OpenRouter; with the daily cap exhausted this correctly shows `unavailable` on each tier and a "no usable answer" banner |
+
+The two payload-preservation prompts are the ones worth understanding: both used to fail — the
+summarizer would talk about the stock market from memory, and the translator would try to
+*answer* "where is the nearest train station?" — because the classifier's prompt-rewrite step
+was paraphrasing away the text it was given ([`BUILD-LOG.md` #13](BUILD-LOG.md)).
+
+When no tier's answer passes the judge, the UI says so explicitly and labels the output
+**"Best attempt (rejected)"** with the judge's reason, rather than presenting a rejected answer
+as if it were verified.
+
 ## Results
 
-From the eval harness (`eval/run_eval.py`) — 25 queries across all 5 task types, cascade vs.
-an always-tier-4 baseline (raw query, no classification, no escalation):
+From `eval/run_eval.py` — 25 queries across all five task types, each run through the full
+cascade **and** through an always-tier-4 baseline (raw query, no classification, no escalation).
 
 | Metric | Value |
 |---|---|
-| Cascade pass rate | 68% (parity with the always-max-tier baseline) |
-| Avg. compute saved vs. always-tier-4 | 63.9% |
-| Confidence calibration (ECE) | 0.405 — 0 is perfectly calibrated |
+| Avg. active-parameter compute saved vs. always-tier-4 | **76.6%** |
+| Cascade pass rate | **72%** overall — **90%** (18/20) excluding queries no model was reachable for |
+| Confidence calibration (ECE) | **0.131** — 0 is perfect calibration |
+| Where queries resolved | **13 at tier 1**, 6 at tier 2, 1 at tier 3 |
 
-The calibration number is the interesting one: in the 0.8–1.0 self-reported confidence bucket
-(i.e., "I'm 8-10/10 sure"), the actual judge-verified accuracy was only ~61%. Small models are
-reliably overconfident — which is why the judge fires on every answer rather than trusting
-confidence alone. See `eval/results_baseline_before_fixes.json` for the raw run and
-`BUILD-LOG.md` for what that number changed after fixing a judge rubric mismatch and a
-classifier prompt bug. *(A fully clean post-fix run is pending — OpenRouter's free-tier daily
-quota was exhausted during testing; see Limitations.)*
+That last row is the result in miniature: two thirds of the benchmark was answered acceptably by
+the cheapest model on the ladder.
 
-## Tech stack
+Per task type, from the same run:
 
-Python 3.11+, `groq` SDK, `openai` SDK (OpenRouter is OpenAI-compatible), `pydantic` v2 for
-structured-output validation, `streamlit` for the UI, `python-dotenv` for config.
+| Type | Pass | Note |
+|---|---|---|
+| QA | **6/6** | |
+| Reasoning | **4/4** | |
+| Summarization | **5/5** | was **0/5** before the prompt-payload fix — [`BUILD-LOG.md` #13](BUILD-LOG.md) |
+| Translation | 3/5 | tier-2 translation model is OpenRouter and was unreachable |
+| Coding | 0/5 | **no model ran at all** — coding is OpenRouter at tiers 1-3 and the free daily quota was exhausted |
 
-## Project structure
+**On the calibration number, and its limits.** The top confidence bucket claims 0.95 and
+delivers 0.82, so the models remain overconfident — that's why the judge fires on every answer
+rather than trusting a score. ECE improved 0.52 → 0.23 → 0.13 as real bugs were fixed, which is
+decent evidence it tracks something real. But it must be read with one caveat stated plainly:
+**this ECE measures confidence against the judge's verdicts, not against ground truth.** When
+the judge was over-strict it failed correct answers, which inflated the apparent overconfidence.
+A meaningful chunk of the improvement from 0.23 to 0.13 was the judge getting *less wrong*, not
+the models getting better calibrated. The metric is only ever as good as its referee — see
+[`BUILD-LOG.md` #17](BUILD-LOG.md).
 
-```
-src/
-  llm_client.py   provider abstraction (Groq/OpenRouter) + JSON-retry helper
-  registry.py     tier x type -> model, plain dict, no class hierarchy
-  classifier.py   difficulty x type tagging + prompt optimization
-  judge.py        binary pass/fail answer evaluation, task-type-aware rubric
-  cascade.py      the waterfall escalation loop
-  metrics.py      compute-saved % and illustrative $-saved
-  formatter.py    per-task-type answer formatting
-  app.py          Streamlit UI
-checks/           one assert-based self-check per module, no pytest
-eval/             25-query benchmark harness + calibration (ECE) analysis
-```
+**Read `eval/results.json` with the caveats it records, not as a headline.** Queries where every
+tier was rate-limited are excluded from the savings average — they burn zero compute and would
+otherwise score a meaningless "100% saved". And the baseline arm reports `n/a` rather than 0%
+when the tier-4 model was unreachable, because scoring an outage as a baseline failure would
+credit the cascade for a provider problem. Since tier 4 is OpenRouter for every task type, the
+head-to-head baseline comparison needs free-tier quota headroom — see Limitations.
 
 ## Running it
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # add your free Groq + OpenRouter API keys
+cp .env.example .env          # add your free Groq + OpenRouter API keys
 PYTHONPATH=. streamlit run src/app.py
 ```
 
-Run the self-checks: `PYTHONPATH=. python -m checks.check_<name>`
-Run the eval harness: `PYTHONPATH=. python -m eval.run_eval`
+`PYTHONPATH=.` is required: `streamlit run src/app.py` launches the file directly, which puts
+only `src/` on the import path, so `from src.cascade import ...` can't resolve.
+
+```bash
+PYTHONPATH=. python -m checks.check_cascade      # any single check
+PYTHONPATH=. python -m eval.run_eval             # full benchmark sweep
+PYTHONPATH=. python -m checks.check_model_ids    # verify the registry against live catalogs
+```
+
+## Project structure
+
+```
+src/
+  llm_client.py   provider abstraction (Groq/OpenRouter), JSON extraction, retry, rate limits
+  registry.py     (tier, type) -> model, a plain dict
+  classifier.py   difficulty x type tagging + prompt optimization
+  judge.py        binary pass/fail evaluation with a task-type-aware rubric
+  cascade.py      the escalation loop, trace recording, and query cache
+  metrics.py      compute saved (unclamped) and an illustrative $ figure
+  formatter.py    per-task-type answer presentation
+  app.py          Streamlit UI
+checks/           one assert-based script per concern; 5 of 11 run in CI without API keys
+eval/             25-query benchmark harness + calibration (ECE) analysis
+```
+
+No pytest — each check is a plain script you run with `python -m checks.check_x` that prints
+what it saw and asserts on it. For a project this size a test framework is ceremony; what
+matters is that everything has something that fails loudly when it breaks.
 
 ## Limitations
 
 - **OpenRouter's free tier caps unpaid accounts at 50 requests/day, account-wide** (1000/day
-  with a one-time $10 credit). A day of active testing will exhaust it. The system degrades
-  correctly when this happens (tiers get marked unavailable, cascade escalates or returns a
-  best-effort answer) — verified under this exact condition, not just simulated.
-- The judge is a small model (`llama-3.1-8b-instant`) and, per its own documented scope, is
-  used as a binary pass/fail filter, not a nuanced scorer — it still occasionally nitpicks
-  valid answers on subjective tasks (summarization, translation) even with task-aware guidance.
-- Dollar-cost savings are illustrative (a documented approximate rate, not real per-model
-  billing) since these are free models with no actual per-token bill.
-- Translation quality at tier 1 is weakest on less common language pairs — the underlying
-  model handles common pairs (EN↔ES/FR/DE) better than less common ones.
+  with a one-time $10 credit); Groq caps at 30 requests/minute. A day of active testing exhausts
+  the former. The system degrades correctly — tiers get marked unavailable and the cascade
+  escalates or returns a best-effort answer — verified under the real condition, not a simulated
+  one. But it does mean the full cross-provider eval can only be run about once a day.
+- **The judge is the weakest component.** It's a small model, and even with task-aware guidance
+  it still occasionally nitpicks valid answers on subjective tasks. For objective task types the
+  right long-term answer isn't a better judge prompt, it's real ground truth — for coding, that
+  means running the tests.
+- **The benchmark is 25 self-authored queries.** It's a good bug-finding instrument (it found
+  five real bugs in its first run) and a weak statistical claim.
+- **Dollar savings are illustrative** — a documented approximate rate, not per-model billing.
+  These are free models with no bill to reconcile against.
+- **The cache is exact-match, in-process.** Paraphrases miss, and it's cleared on restart.
 
-## Process
+## How this was built
 
-This was built with a full design spec → implementation plan → task-by-task build cycle, with
-every real bug, debugging step, and design decision logged as it happened:
-- [`BUILD-LOG.md`](BUILD-LOG.md) — every real error hit and how it was diagnosed and fixed
-- [`DEVLOG.md`](DEVLOG.md) — what was built, in order, and why
-- [`INTERVIEW-PREP.md`](INTERVIEW-PREP.md) — project walkthrough + anticipated interview Q&A
+Every real bug, debugging step and design decision was logged as it happened — including the
+ones where the first diagnosis was wrong:
+
+- **[`BUILD-LOG.md`](BUILD-LOG.md)** — a debugging casebook. 16 issues, each as
+  symptom → how I found the cause → root cause → fix → takeaway. Only about half were bugs in
+  code; the rest were bugs in a prompt, a metric, a test, or an assumption.
+- **[`DEVLOG.md`](DEVLOG.md)** — what got built and why, module by module, with the concepts
+  explained.
+- **[`INTERVIEW-PREP.md`](INTERVIEW-PREP.md)** — project walkthrough, design rationale and a
+  full anticipated Q&A.
+
+The single most useful entry is `BUILD-LOG.md` #13, where a documented "fix" turned out to be a
+wrong root cause that had produced a small improvement — the most effective disguise a wrong
+diagnosis has.
