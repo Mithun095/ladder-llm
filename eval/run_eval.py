@@ -26,6 +26,7 @@ def run_baseline(query: str, task_type: str):
 def main():
     cascade_pass = 0
     baseline_pass = 0
+    answered_count = 0
     total_saved_pct = 0.0
     total_dollar_saved = 0.0
     confidence_verdict_pairs: list[tuple[int, bool]] = []
@@ -34,7 +35,9 @@ def main():
     skipped = []
     for i, query in enumerate(BENCHMARK_QUERIES, 1):
         try:
-            result = run_cascade(query)
+            # Cache off: an eval number that silently benefits from a cache hit isn't
+            # measuring the router, and every benchmark query is distinct anyway.
+            result = run_cascade(query, use_cache=False)
 
             cascade_ok = bool(result.trace) and result.trace[-1].status == "accepted"
             cascade_pass += cascade_ok
@@ -43,10 +46,16 @@ def main():
                 if step.confidence is not None and step.status in ("accepted", "judged_fail"):
                     confidence_verdict_pairs.append((step.confidence, step.status == "accepted"))
 
+            # Savings only mean something if an answer came out. A query where every tier was
+            # rate-limited burns zero compute and scores "100% saved" — technically true and
+            # completely misleading, since nothing was delivered. Count those separately.
             saved_pct = compute_saved_pct(result.trace, result.type)
             dollar_saved = estimate_dollar_saved(result.trace, result.type)
-            total_saved_pct += saved_pct
-            total_dollar_saved += dollar_saved
+            answered = result.answer != "No model produced a usable answer."
+            if answered:
+                answered_count += 1
+                total_saved_pct += saved_pct
+                total_dollar_saved += dollar_saved
 
             baseline = run_baseline(query, result.type)
             baseline_ok = bool(baseline and baseline["passed"])
@@ -58,7 +67,8 @@ def main():
                 "tier_used": result.tier_used,
                 "cascade_passed": cascade_ok,
                 "baseline_passed": baseline_ok,
-                "compute_saved_pct": round(saved_pct, 1),
+                "answered": answered,
+                "compute_saved_pct": round(saved_pct, 1) if answered else None,
             })
             print(f"[{i}/{len(BENCHMARK_QUERIES)}] {result.type:14s} tier={result.tier_used} "
                   f"cascade={'pass' if cascade_ok else 'fail'} baseline={'pass' if baseline_ok else 'fail'} "
@@ -77,9 +87,10 @@ def main():
 
     summary = {
         "num_queries": n,
+        "num_answered": answered_count,
         "cascade_pass_rate": cascade_pass / n,
         "baseline_pass_rate": baseline_pass / n,
-        "avg_compute_saved_pct": total_saved_pct / n,
+        "avg_compute_saved_pct": total_saved_pct / answered_count if answered_count else 0.0,
         "total_dollar_saved_illustrative": round(total_dollar_saved, 4),
         "confidence_calibration_ece": round(ece, 3),
         "reliability_table": reliability_table(confidence_verdict_pairs),
@@ -90,7 +101,7 @@ def main():
     print("\n=== Summary ===")
     print(f"Cascade pass rate:              {summary['cascade_pass_rate'] * 100:.1f}%")
     print(f"Baseline (tier {MAX_TIER}) pass rate:      {summary['baseline_pass_rate'] * 100:.1f}%")
-    print(f"Avg compute saved:              {summary['avg_compute_saved_pct']:.1f}%")
+    print(f"Avg compute saved:              {summary['avg_compute_saved_pct']:.1f}% (over the {answered_count} queries that produced an answer)")
     print(f"Illustrative $ saved:           ${summary['total_dollar_saved_illustrative']:.4f} across {n} queries")
     print(f"Confidence ECE:                 {summary['confidence_calibration_ece']:.3f} "
           f"(0=perfectly calibrated, higher=more overconfident)")

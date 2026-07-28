@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from src.llm_client import call_groq, call_json
+from src.llm_client import ModelUnavailable, call_groq, call_json
 
 JUDGE_MODEL = "llama-3.1-8b-instant"
 
@@ -30,6 +30,12 @@ class JudgeResult(BaseModel):
 
 
 def judge(query: str, answer: str, task_type: str | None = None) -> JudgeResult | None:
+    """Returns None if the judge can't produce a verdict — either it was rate-limited or it
+    returned unparseable JSON. The caller decides what an un-judged answer means; it must not
+    crash the request, since the judge is a quality gate, not the answer itself."""
     system = BASE_SYSTEM_PROMPT + TYPE_GUIDANCE.get(task_type, "")
     user = f"Question: {query}\n\nAnswer: {answer}"
-    return call_json(call_groq, JUDGE_MODEL, system, user, JudgeResult)
+    try:
+        return call_json(call_groq, JUDGE_MODEL, system, user, JudgeResult)
+    except ModelUnavailable:
+        return None

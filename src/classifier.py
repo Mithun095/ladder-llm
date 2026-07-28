@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from src.llm_client import call_groq, call_json
+from src.llm_client import ModelUnavailable, call_groq, call_json
 
 CLASSIFIER_MODEL = "llama-3.1-8b-instant"
 
@@ -32,7 +32,14 @@ class ClassifierResult(BaseModel):
 
 
 def classify(query: str) -> ClassifierResult:
-    result = call_json(call_groq, CLASSIFIER_MODEL, SYSTEM_PROMPT, query, ClassifierResult)
+    # The classifier is a hard dependency of every query, so it can't be allowed to fail the
+    # request: if the model is rate-limited or returns junk, fall back to a neutral
+    # medium/qa classification with the query passed through untouched. That routes to a
+    # middle tier and still answers, rather than crashing before any model is even tried.
+    try:
+        result = call_json(call_groq, CLASSIFIER_MODEL, SYSTEM_PROMPT, query, ClassifierResult)
+    except ModelUnavailable:
+        result = None
     if result is None:
         return ClassifierResult(difficulty="medium", type="qa", optimized_prompt=query)
     return result

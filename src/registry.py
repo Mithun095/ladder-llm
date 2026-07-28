@@ -30,7 +30,10 @@ REGISTRY: dict[tuple[int, str], ModelConfig] = {
     (2, "qa"): ModelConfig("groq", "qwen/qwen3.6-27b", 27),
     (2, "coding"): ModelConfig("openrouter", "poolside/laguna-xs-2.1:free", 7),
     (2, "reasoning"): ModelConfig("groq", "qwen/qwen3.6-27b", 27),
-    (2, "summarization"): ModelConfig("groq", "llama-3.3-70b-versatile", 70),
+    # Was llama-3.3-70b-versatile (70B dense). Dropped: 70B active is *more* than the 55B-active
+    # tier-4 baseline every saving is measured against, so escalating to it reported negative
+    # savings — a tier-2 slot that costs more than the ceiling is a routing bug, not a tradeoff.
+    (2, "summarization"): ModelConfig("groq", "qwen/qwen3.6-27b", 27),
     (2, "translation"): ModelConfig("openrouter", "google/gemma-4-26b-a4b-it:free", 4),
 
     (3, "qa"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1),

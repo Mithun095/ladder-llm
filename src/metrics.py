@@ -15,9 +15,13 @@ def total_active_params_burned(trace: list[TraceStep]) -> float:
 
 
 def compute_saved_pct(trace: list[TraceStep], task_type: str) -> float:
+    """Deliberately NOT clamped at 0. A cascade that escalates through several tiers can burn
+    more active params than one direct max-tier call would have (e.g. expert-difficulty coding:
+    32B at tier 3 + 55B at tier 4 = 87B vs. a 55B baseline). Clamping that to "0% saved" would
+    hide the routing's genuine worst case; showing -58% is the honest number."""
     baseline = get_model(MAX_TIER, task_type).active_params_b
     used = total_active_params_burned(trace)
-    return max(0.0, (baseline - used) / baseline * 100)
+    return (baseline - used) / baseline * 100
 
 
 def estimate_dollar_cost(active_params_b: float) -> float:
@@ -25,6 +29,8 @@ def estimate_dollar_cost(active_params_b: float) -> float:
 
 
 def estimate_dollar_saved(trace: list[TraceStep], task_type: str) -> float:
+    """Also unclamped, for the same reason as compute_saved_pct — a negative return means the
+    cascade cost more than the baseline on this query."""
     baseline_b = get_model(MAX_TIER, task_type).active_params_b
     used_b = total_active_params_burned(trace)
-    return estimate_dollar_cost(max(0.0, baseline_b - used_b))
+    return estimate_dollar_cost(baseline_b - used_b)

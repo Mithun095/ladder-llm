@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -47,30 +48,66 @@ def call_openrouter(model_id: str, system: str, user: str) -> str:
     return resp.choices[0].message.content or ""
 
 
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text
-        if text.endswith("```"):
-            text = text.rsplit("```", 1)[0]
-    text = text.strip()
-    # Reasoning-tuned models (e.g. qwen3.6) emit a chain-of-thought block — <think>...</think>
-    # or similar — before the actual JSON, and often quote draft copies of the JSON *inside*
-    # that reasoning too. The real answer is the last one emitted, so take the LAST {...},
-    # not the first — using the first would span from an early draft to the final object,
-    # swallowing all the reasoning text in between as invalid JSON.
-    start, end = text.rfind("{"), text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        text = text[start:end + 1]
-    return text
+_DECODER = json.JSONDecoder()
+
+
+def _extract_json(text: str) -> str:
+    """Pull the model's real JSON object out of whatever it wrapped it in.
+
+    Small models bury the JSON three different ways, sometimes at once: markdown code
+    fences, a reasoning block (`<think>...</think>`) ahead of the answer, and — inside that
+    reasoning — draft copies of the JSON it's about to emit. Rather than pattern-match each
+    wrapper, scan for every position where a *complete* JSON object starts, skip past each
+    one found, and keep the last top-level object. The real answer is always the last one
+    emitted; skipping past a parsed object is what keeps a nested `{...}` (or a brace inside
+    an answer string, e.g. a Python snippet) from being mistaken for the start of a new one.
+    """
+    best = None
+    i = 0
+    while (i := text.find("{", i)) != -1:
+        try:
+            _, end = _DECODER.raw_decode(text, i)
+        except ValueError:
+            i += 1
+            continue
+        best = text[i:end]
+        i = end
+    return best if best is not None else text.strip()
+
+
+RETRY_WAIT_S = 2.0
 
 
 def call_json(call_fn, model_id: str, system: str, user: str, schema: type[BaseModel]):
-    """Call an LLM expecting JSON; validate against schema; retry once on failure."""
+    """Call an LLM expecting JSON and validate the result against `schema`.
+
+    Handles the two unrelated ways this fails, each with one retry:
+
+    - **Provider says 429/503.** Groq's per-minute rate limit clears in seconds ("try again
+      in 2s"), so one short wait recovers it outright. If the second attempt also fails, the
+      outage is real (e.g. OpenRouter's *daily* free-tier cap, which no wait will fix) and
+      `ModelUnavailable` is raised so the cascade can skip this tier.
+    - **Model returns something that isn't valid JSON.** Retry once with a stricter
+      instruction appended, then give up and return None so the caller can escalate.
+
+    This lives here, not in `call_model()`, because the classifier and the judge call
+    `call_json` directly — putting the 429 handling one layer up left both of them able to
+    crash the whole app on a rate limit that the answering path handled gracefully.
+    """
     for attempt in range(2):
-        raw = call_fn(model_id, system, user)
         try:
-            return schema.model_validate_json(_strip_fences(raw))
+            raw = call_fn(model_id, system, user)
+        except (GroqAPIStatusError, OpenAIAPIStatusError) as e:
+            status = getattr(e, "status_code", None)
+            if status not in (429, 503):
+                raise  # e.g. a 400 means the registry has a bad model ID — a real bug, crash loudly
+            if attempt == 0:
+                time.sleep(RETRY_WAIT_S)
+                continue
+            raise ModelUnavailable(f"{model_id} unavailable ({status})") from e
+
+        try:
+            return schema.model_validate_json(_extract_json(raw))
         except (ValidationError, json.JSONDecodeError):
             if attempt == 0:
                 system = system + "\n\nReply with ONLY valid JSON, no other text."
@@ -79,10 +116,4 @@ def call_json(call_fn, model_id: str, system: str, user: str, schema: type[BaseM
 
 def call_model(model_config, system: str, user: str, schema: type[BaseModel]):
     call_fn = call_groq if model_config.provider == "groq" else call_openrouter
-    try:
-        return call_json(call_fn, model_config.model_id, system, user, schema)
-    except (GroqAPIStatusError, OpenAIAPIStatusError) as e:
-        status = getattr(e, "status_code", None)
-        if status in (429, 503):
-            raise ModelUnavailable(f"{model_config.model_id} unavailable ({status})") from e
-        raise
+    return call_json(call_fn, model_config.model_id, system, user, schema)

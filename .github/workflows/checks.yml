@@ -22,6 +22,8 @@ jobs:
       - run: python -m checks.check_registry
       - run: python -m checks.check_calibration
       - run: python -m checks.check_metrics_formatter
+      - run: python -m checks.check_json_extraction
+      - run: python -m checks.check_error_handling
 
   # check_env, check_llm_client, check_classifier, check_judge, check_cascade, and
   # eval/run_eval.py all make real API calls and need real GROQ_API_KEY /
