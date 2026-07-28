@@ -141,3 +141,45 @@ ran the entire `checks/` suite end to end as a final gate before the last commit
 
 ---
 *(build complete — all 9 planned tasks done; see BUILD-LOG.md for the full error/debugging record)*
+
+## Post-build: eval harness + resume-focused enhancements
+
+Researched what would make this project stand out beyond "it works" — grounded in real cascade
+routing literature (FrugalGPT, RouteLLM) and current production guidance. Built the highest-
+value items:
+
+- **`eval/` package**: a 25-query benchmark set spanning all 5 task types, `run_eval.py` runs
+  each query through both the full cascade *and* an always-max-tier baseline (raw query, no
+  classification/prompt optimization/escalation — the "naive" approach), judges both, and
+  reports cascade pass rate vs. baseline pass rate vs. compute saved — the same kind of
+  quality/cost tradeoff metric RouteLLM's paper reports.
+- **`eval/calibration.py`**: turns the empirically-observed confidence overconfidence pattern
+  (see BUILD-LOG) into an actual Expected Calibration Error (ECE) metric plus a reliability
+  table, computed from every (confidence, judge-verdict) pair collected during an eval sweep.
+- **Dollar-cost translation** in `metrics.py`: maps active-param savings to an illustrative
+  dollar figure via a documented, approximate per-active-billion-param rate — makes the
+  abstract compute-savings number legible to a non-ML audience.
+- **CI** (`.github/workflows/checks.yml`): runs the checks that don't need live API keys on
+  every push.
+
+Running the eval harness live surfaced 5 real bugs/gaps in one sitting (all logged in detail in
+`BUILD-LOG.md`): two crashes from unhandled `None`/empty API responses, a metrics-accounting
+bug where a fully-failed run was reported as "100% compute saved," a judge rubric that
+punished valid summaries/translations for not being factually literal, and — caught live in
+the UI by manual testing, not by any automated check — a classifier prompt-rewrite step that
+was silently corrupting translation instructions into unrelated questions. All fixed at their
+actual root cause (shared client functions, cascade's trace recording, the judge's prompt, the
+classifier's prompt) rather than patched at the call site that happened to surface them.
+
+Also hit a real operational ceiling: OpenRouter's free tier caps unpaid accounts at 50
+free-model requests *per day, account-wide* — a day of active testing exhausted it mid-audit.
+The `ModelUnavailable` handling degraded correctly under that real, sustained condition with no
+crash, which is itself a validation of the design — but it means the eval harness's final
+"after all fixes" report needs a re-run after the daily reset. `eval/results_baseline_before_fixes.json`
+preserves the pre-fix numbers (68% cascade/baseline pass rate parity, 63.9% avg compute saved,
+0.405 ECE) as a before/after reference point once the clean run lands.
+
+**Deliberately not built this round**: a semantic cache in front of the classifier, and an
+A/B comparison view in the UI (cascade vs. always-max-tier, side by side, live) — both were
+flagged as valuable in the research but are more invasive changes to core routing/UI that
+deserve their own focused pass rather than being rushed in alongside everything else.

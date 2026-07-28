@@ -62,7 +62,9 @@ def run_cascade(query: str) -> CascadeResult:
             continue
 
         if result is None:
-            trace.append(TraceStep(tier, model_config.model_id, "malformed_response"))
+            # The model still ran and generated tokens (compute was spent) even though the
+            # output didn't parse as valid JSON — unlike "unavailable", this isn't free.
+            trace.append(TraceStep(tier, model_config.model_id, "malformed_response", active_params_b=model_config.active_params_b))
             tier += 1
             continue
 
@@ -77,7 +79,7 @@ def run_cascade(query: str) -> CascadeResult:
                 tier += 1
                 continue
 
-        verdict = judge(query, result.answer)
+        verdict = judge(query, result.answer, classification.type)
         if verdict is not None and verdict.verdict == "pass":
             trace.append(TraceStep(tier, model_config.model_id, "accepted", result.confidence, verdict.reason, model_config.active_params_b))
             break

@@ -1,0 +1,29 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  non-live-checks:
+    runs-on: ubuntu-latest
+    # These checks never call a live API, but src/llm_client.py constructs the Groq/OpenAI
+    # clients at import time, which requires the env vars to exist even when unused.
+    # Placeholder values, not real secrets.
+    env:
+      GROQ_API_KEY: placeholder
+      OPENROUTER_API_KEY: placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m checks.check_registry
+      - run: python -m checks.check_calibration
+      - run: python -m checks.check_metrics_formatter
+
+  # check_env, check_llm_client, check_classifier, check_judge, check_cascade, and
+  # eval/run_eval.py all make real API calls and need real GROQ_API_KEY /
+  # OPENROUTER_API_KEY secrets configured in this repo's Actions settings to run in CI.
+  # Left out of automated CI for now — run them locally with your own .env.

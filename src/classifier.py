@@ -16,7 +16,13 @@ type guidance:
 (e.g. "what is a closure in Python?" is qa, not coding — no code is being requested).
 - "reasoning": math, logic, or proofs.
 - "summarization": condensing given text.
-- "translation": converting text between languages."""
+- "translation": converting text between languages.
+
+optimized_prompt guidance:
+- For "translation" queries, keep the instruction explicit: "Translate '<exact source text>' \
+to <language>." Do not rephrase it into a plain question — that erases the instruction to \
+translate and makes the downstream model try to answer it instead.
+- For other types, rewrite for clarity as needed."""
 
 
 class ClassifierResult(BaseModel):

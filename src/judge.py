@@ -6,10 +6,22 @@ from src.llm_client import call_groq, call_json
 
 JUDGE_MODEL = "llama-3.1-8b-instant"
 
-SYSTEM_PROMPT = """You are a strict answer judge. Given a question and a proposed answer, decide \
+BASE_SYSTEM_PROMPT = """You are a strict answer judge. Given a question and a proposed answer, decide \
 if the answer is correct and adequately addresses the question. Respond with ONLY this JSON \
 shape, no other text:
 {"verdict": "pass"|"fail", "reason": "<one sentence>"}"""
+
+# A generic "is this factually correct" rubric fails subjective tasks: it nitpicks a valid
+# summary for omitting a secondary detail, or a valid translation for not being a literal
+# word-for-word match. Found empirically via eval/run_eval.py — summarization queries were
+# failing the judge almost every time despite objectively reasonable answers.
+TYPE_GUIDANCE = {
+    "summarization": "\n\nThis is a summarization task: judge whether the summary faithfully "
+    "captures the main point, not whether it retains every secondary detail — omitting minor "
+    "details is the point of summarizing, not a flaw.",
+    "translation": "\n\nThis is a translation task: judge whether the meaning is preserved, "
+    "not whether the phrasing is a literal word-for-word match.",
+}
 
 
 class JudgeResult(BaseModel):
@@ -17,6 +29,7 @@ class JudgeResult(BaseModel):
     reason: str
 
 
-def judge(query: str, answer: str) -> JudgeResult | None:
+def judge(query: str, answer: str, task_type: str | None = None) -> JudgeResult | None:
+    system = BASE_SYSTEM_PROMPT + TYPE_GUIDANCE.get(task_type, "")
     user = f"Question: {query}\n\nAnswer: {answer}"
-    return call_json(call_groq, JUDGE_MODEL, SYSTEM_PROMPT, user, JudgeResult)
+    return call_json(call_groq, JUDGE_MODEL, system, user, JudgeResult)

@@ -29,7 +29,9 @@ def call_groq(model_id: str, system: str, user: str) -> str:
             {"role": "user", "content": user},
         ],
     )
-    return resp.choices[0].message.content
+    if not resp.choices:
+        return ""
+    return resp.choices[0].message.content or ""
 
 
 def call_openrouter(model_id: str, system: str, user: str) -> str:
@@ -40,7 +42,9 @@ def call_openrouter(model_id: str, system: str, user: str) -> str:
             {"role": "user", "content": user},
         ],
     )
-    return resp.choices[0].message.content
+    if not resp.choices:
+        return ""
+    return resp.choices[0].message.content or ""
 
 
 def _strip_fences(text: str) -> str:
