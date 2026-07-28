@@ -100,8 +100,11 @@ summarization at 70B dense, i.e. more expensive than the 55B-active tier-4 ceili
 only after the savings metric stopped clamping negative values, and fixed by swapping in a 27B
 model (`BUILD-LOG.md` #16).
 
-Before any of this was hardcoded, `checks/discover_models.py` pulled the live model lists from
-both providers and every grid entry was checked against what actually existed.
+Before any of this was hardcoded, the live model lists were pulled from both providers and every
+grid entry checked against what actually existed. That started as a script that merely *printed*
+both catalogs for manual comparison — which is why it failed to catch a model being delisted
+months later (`BUILD-LOG.md` #2). It's now `checks/check_model_ids.py`, which validates the
+registry and fails loudly. Run it before trusting a registry you haven't touched in a while.
 
 ## Task 4 — `classifier.py`: the routing decision
 

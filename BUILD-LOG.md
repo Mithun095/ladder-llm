@@ -60,12 +60,21 @@ on whichever unlucky query first routes to that tier.
 **Root cause** — a hardcoded table of external identifiers with no verification step is
 config that lies quietly.
 
-**Fix** — wrote `checks/discover_models.py` to hit both providers' live model-list endpoints,
-and cross-checked all 20 grid entries against what actually existed *that day* before writing
-a single line of `registry.py`.
+**Fix** — wrote a script to hit both providers' live model-list endpoints, and cross-checked all
+20 grid entries against what actually existed *that day* before writing a single line of
+`registry.py`.
 
 **Takeaway** — when you hardcode identifiers owned by someone else, write the script that
-verifies them. It took ten minutes and turned a class of runtime error into a startup check.
+verifies them.
+
+> ⚠️ **I got this half right, and it cost me later.** That first script only *printed* both
+> catalogs for me to eyeball. It never compared them to the registry, so it could only ever
+> catch a stale ID on the day I happened to run it and read the output carefully. Months later
+> `poolside/laguna-m.1:free` was delisted and started returning 404 mid-eval-sweep — exactly the
+> failure this script existed to prevent, sailing past a script that was technically running.
+> It's now `checks/check_model_ids.py`, which validates every entry and **fails loudly**. A
+> check that reports instead of asserting isn't a check, it's a report — and nobody reads a
+> report that has always been fine.
 
 ---
 
