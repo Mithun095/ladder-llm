@@ -15,6 +15,12 @@ other text:
 STARTING_TIER = {"easy": 1, "medium": 1, "hard": 2, "expert": 3}
 CEILING_TIER = {"easy": 2, "medium": 2, "hard": 3, "expert": 4}
 
+# Live testing showed self-reported confidence landing at 9-10 on every call regardless of
+# answer correctness (including a hallucinated answer to a pi-digit question) — the exact
+# overconfidence failure mode learning-guide.md warned about. Disabling the fast-accept/
+# fast-escalate shortcuts and always firing the judge is the documented fallback for it.
+JUDGE_ALWAYS = True
+
 
 class AnswerResult(BaseModel):
     answer: str
@@ -62,13 +68,14 @@ def run_cascade(query: str) -> CascadeResult:
 
         last_answer = result.answer
 
-        if result.confidence >= 8:
-            trace.append(TraceStep(tier, model_config.model_id, "accepted", result.confidence, active_params_b=model_config.active_params_b))
-            break
-        if result.confidence <= 4:
-            trace.append(TraceStep(tier, model_config.model_id, "escalated", result.confidence, active_params_b=model_config.active_params_b))
-            tier += 1
-            continue
+        if not JUDGE_ALWAYS:
+            if result.confidence >= 8:
+                trace.append(TraceStep(tier, model_config.model_id, "accepted", result.confidence, active_params_b=model_config.active_params_b))
+                break
+            if result.confidence <= 4:
+                trace.append(TraceStep(tier, model_config.model_id, "escalated", result.confidence, active_params_b=model_config.active_params_b))
+                tier += 1
+                continue
 
         verdict = judge(query, result.answer)
         if verdict is not None and verdict.verdict == "pass":

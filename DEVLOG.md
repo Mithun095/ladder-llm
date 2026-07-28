@@ -100,5 +100,44 @@ script on every interaction, including every keystroke — so the cascade call i
 `if submit and query`, and the result is stashed in `st.session_state` so it survives that
 rerun instead of disappearing or re-firing.
 
+Run it with `PYTHONPATH=<project root> streamlit run src/app.py` — plain `streamlit run
+src/app.py` throws `ModuleNotFoundError: No module named 'src'`, because Streamlit launches
+the file directly (like `python src/app.py`), which only adds `src/`'s own directory to the
+import path, not the project root that `src.cascade` needs to resolve against. See
+`BUILD-LOG.md` for the full explanation.
+
+First real end-to-end test in the browser: "can you write a code to find weather the number
+is prime or not" (typo and all) classified as `coding`, routed to tier 1's coding model
+(`cohere/north-mini-code:free`), accepted immediately at confidence 10, code rendered inside
+a fenced block by `format_answer`, 87% compute saved vs. max tier, 7B active params burned.
+Whole pipeline — classifier → registry → cascade → metrics → formatter → UI — worked
+correctly on the first real query.
+
+## Task 9 — Edge-case hardening
+
+Ran three real probes instead of assuming the design docs' warnings were already handled:
+
+1. **Unavailable-tier path.** Simulating an outage with a fake model ID actually returned a
+   `400`, not a `503` — different failure, and it crashed instead of degrading. Decided to
+   leave `400` uncaught on purpose (a bad model ID means the registry itself is broken, which
+   should surface loudly, not get masked as a routine outage). Simulated a real `503` by
+   mocking the provider call directly — confirmed the tier gets logged `"unavailable"` and the
+   cascade moves on; if every tier in range is unavailable, it returns a clear fallback message
+   instead of crashing.
+2. **Confidence calibration, empirically checked.** 5 live cascade runs all came back with
+   confidence ≥9, including a hallucinated wrong answer to a pi-digit question. That's the
+   overconfidence failure mode from `learning-guide.md`, confirmed rather than assumed. Flipped
+   on `JUDGE_ALWAYS = True` in `cascade.py` — every answer now goes through the judge instead
+   of fast-accepting on a confidence score alone. Re-ran the same pi-digit question: same wrong
+   answer, but now correctly flagged `judged_fail` with an accurate reason.
+3. **Classifier flip-flop caught by the full check-suite re-run.** "What is a closure in
+   Python?" classified as `coding` instead of `qa` on one run. Confirmed via 6 repeat calls
+   that it wasn't a consistent misclassification (genuine sampling variance at a fuzzy
+   qa/coding boundary), then fixed the root cause — added one clarifying line per type to the
+   classifier's system prompt — rather than loosening the test. 8/8 consistent afterward.
+
+Confirmed `.env` was never staged or committed (`git log --all -- .env` returns nothing), and
+ran the entire `checks/` suite end to end as a final gate before the last commit.
+
 ---
-*(updated as later tasks — edge-case hardening, UI testing — get done)*
+*(build complete — all 9 planned tasks done; see BUILD-LOG.md for the full error/debugging record)*

@@ -8,7 +8,15 @@ CLASSIFIER_MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """You are a query classifier. Given a user query, respond with ONLY this JSON \
 shape, no other text:
-{"difficulty": "easy"|"medium"|"hard"|"expert", "type": "qa"|"coding"|"reasoning"|"summarization"|"translation", "optimized_prompt": "<the query, rewritten to be clear and unambiguous>"}"""
+{"difficulty": "easy"|"medium"|"hard"|"expert", "type": "qa"|"coding"|"reasoning"|"summarization"|"translation", "optimized_prompt": "<the query, rewritten to be clear and unambiguous>"}
+
+type guidance:
+- "coding": the user wants code written, debugged, or reviewed (e.g. "write a function that...").
+- "qa": the user wants a concept explained, even if the concept is about programming \
+(e.g. "what is a closure in Python?" is qa, not coding — no code is being requested).
+- "reasoning": math, logic, or proofs.
+- "summarization": condensing given text.
+- "translation": converting text between languages."""
 
 
 class ClassifierResult(BaseModel):

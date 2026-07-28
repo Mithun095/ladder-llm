@@ -88,5 +88,78 @@ LLM cascade on every character typed into the input field, not just on submit. I
 call behind `if submit and query`, and stashed the result in `st.session_state` so it survives
 the rerun that clicking Submit itself triggers, instead of getting lost or re-triggered.
 
+**Real bug hit: `ModuleNotFoundError: No module named 'src'` the first time I opened the app
+in the browser.**
+
+```
+File "/home/mithun/Desktop/ladder-llm/src/app.py", line 3, in <module>
+    from src.cascade import run_cascade
+ModuleNotFoundError: No module named 'src'
+```
+
+Every other module imports fine with `from src.cascade import ...` — my checks all pass, my
+package layout is correct. The difference is *how* the file gets launched. Everywhere else I
+run things as `python -m checks.check_whatever` from the project root, which puts the project
+root on Python's import path automatically. But `streamlit run src/app.py` launches the file
+directly, the same way `python src/app.py` would — and when Python runs a script directly, it
+only adds *that script's own directory* (`.../ladder-llm/src`) to `sys.path`, not the project
+root above it. So `src.cascade` can't resolve, because there's no `src` folder *inside*
+`src/` — the `src` package Python needs to see is the one one level up, and that level never
+got added to the path.
+
+Fix: launch with `PYTHONPATH=<project root> streamlit run src/app.py` instead of just
+`streamlit run src/app.py`. Setting `PYTHONPATH` explicitly adds the project root to the
+import path regardless of how the script itself gets invoked — no code changes needed, since
+this is purely about how the interpreter resolves imports, not a flaw in the package
+structure itself.
+
+## Edge-case hardening pass
+
+**Real bug hit while testing the "unavailable tier" path: I broke the cascade with my own
+test setup, and it taught me something about my error handling.**
+I tried to simulate an OpenRouter outage by pointing a registry entry at a made-up model ID
+(`totally-fake/does-not-exist:free`). That's not what a real outage looks like, though — it
+came back as `400 BadRequestError` ("not a valid model ID"), not `429`/`503`. My code only
+catches `429`/`503` as `ModelUnavailable`; the `400` propagated up and crashed the whole
+cascade. My first reaction was "that's a bug, catch more error codes." On reflection, it
+isn't — a `400` from a bad model ID means *my own registry is broken*, which is a real bug
+that should crash loudly during development, not get silently swallowed the same way as a
+transient free-tier outage. Since `registry.py` is built from a live model-list check, a
+`400` shouldn't happen in production; if it ever does, I want to see it, not have it quietly
+vanish into a trace as "unavailable." I left this uncaught on purpose. To actually test the
+outage path, I simulated a real `503` by mocking the provider call directly instead of using
+a fake model ID — that confirmed the tier gets skipped, logged as `"unavailable"`, and the
+cascade moves on cleanly.
+
+**Real pattern confirmed, not just theorized: self-reported confidence was ≥9 on every single
+live call I made, including a hallucinated answer.**
+I'd read in my own notes that small models tend to be overconfident, but I wanted to see it
+myself before trusting it. I asked "what's the 47th digit after the decimal point of pi?" —
+a question small models are known to get wrong — and the model answered "7" with confidence
+10. Across 5 separate live queries during this build, confidence never once landed in the
+5-7 "fire the judge" band; it was always 9 or 10, correct or not. That's not a coincidence at
+5-for-5 — it's the calibration problem stated plainly: a model's self-rating measures how
+fluent the answer *sounds*, not whether it's *right*. I flipped on the judge-always fallback
+mode (skip the confidence fast-paths entirely, always fire the judge) as a result. Re-running
+the same pi-digit question afterward: same wrong answer ("7"), but this time the judge caught
+it and marked the tier `judged_fail` with an accurate explanation of why it was wrong, instead
+of the confidence score alone waving it through.
+
+**Real bug hit while re-running my full check suite before calling this done: the classifier
+flip-flopped on a query it had classified correctly earlier.**
+"What is a closure in Python?" came back as `type=coding` this time, failing my own test
+that expects `qa`. My first instinct was to loosen the assertion — but I'd already written a
+note to myself in the classifier task that a failed type assertion is "a real signal about
+prompt quality," not something to paper over by relaxing the check. Before touching anything,
+I ran the exact same query through the classifier 6 more times in a row: 6/6 came back `qa`.
+So it wasn't broken, and it wasn't consistently broken either — it was genuine sampling
+variance on a query that sits right on the boundary between two categories ("closure in
+Python" is a programming concept, but the user is asking for an explanation, not code). I
+fixed the actual ambiguity: added one clarifying line per type to the classifier's system
+prompt, explicitly stating that conceptual questions about programming are `qa`, not `coding`,
+unless code is actually being requested. Re-ran the same query 8 times after the prompt
+change: 8/8 came back `qa`. Root-caused a fuzzy category boundary in the prompt, rather than
+patching the symptom by weakening the test.
+
 ---
 *(more entries added below as later steps and edge-case testing surface real issues)*
