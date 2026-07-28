@@ -15,10 +15,10 @@ class ModelConfig:
 # - dense models (llama, qwen, gemma-non-MoE): active == total.
 # - nvidia nemotron "*-aNb" suffix names the active param count directly (e.g. a55b = 55B active).
 # - gpt-oss-120b is a real MoE: ~117B total but ~5.1B active/token — smaller active footprint
-#   than the dense 70B tier-2 model below it. This is intentional; see learning-guide.md's
-#   note on non-monotonic active-param sizing across tiers.
+#   than the dense 70B tier-2 model below it. This is intentional; see README.md's note on
+#   non-monotonic active-param sizing across tiers.
 # - poolside/cohere "mini"/"xs"/"m" sizes have no published param count; estimated from naming,
-#   except laguna-m.1 (~32B) which learning-guide.md gives explicitly.
+#   except laguna-m.1 (~32B), sourced from prior notes on this model.
 REGISTRY: dict[tuple[int, str], ModelConfig] = {
     (1, "qa"): ModelConfig("groq", "llama-3.1-8b-instant", 8),
     (1, "coding"): ModelConfig("openrouter", "cohere/north-mini-code:free", 7),

@@ -17,7 +17,7 @@ CEILING_TIER = {"easy": 2, "medium": 2, "hard": 3, "expert": 4}
 
 # Live testing showed self-reported confidence landing at 9-10 on every call regardless of
 # answer correctness (including a hallucinated answer to a pi-digit question) — the exact
-# overconfidence failure mode learning-guide.md warned about. Disabling the fast-accept/
+# overconfidence failure mode documented in BUILD-LOG.md. Disabling the fast-accept/
 # fast-escalate shortcuts and always firing the judge is the documented fallback for it.
 JUDGE_ALWAYS = True
 

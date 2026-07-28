@@ -1,15 +1,16 @@
 # Dev Log — what got built, in order, and why
 
 A walkthrough of the project as it was built, task by task. For the "what broke and how I
-fixed it" record, see `BUILD-LOG.md`. For the original idea/scope, see `idea.md`,
-`learning-guide.md`, and the full spec at `docs/superpowers/specs/2026-07-28-ladder-llm-design.md`.
+fixed it" record, see `BUILD-LOG.md`. For the project overview and architecture, see
+`README.md`; for interview-ready framing of all of this, see `INTERVIEW-PREP.md`.
 
 ## Setup: spec, plan, git
 
-Before writing code: turned the three source docs (`idea.md`, `learning-guide.md`, `review.md`)
-into a single design spec, then a task-by-task implementation plan. Initialized git (this
-started as a plain folder, no version control) with a `.gitignore` covering `.env` and
-`__pycache__`. Every task below ends in its own commit.
+Before writing code: turned the original project brief (a problem statement, a phased
+learning/build plan, and a pre-build scoring rubric) into a single design spec, then a
+task-by-task implementation plan. Initialized git (this started as a plain folder, no version
+control) with a `.gitignore` covering `.env` and `__pycache__`. Every task below ends in its
+own commit.
 
 ## Task 1 — Project scaffolding
 
@@ -126,7 +127,7 @@ Ran three real probes instead of assuming the design docs' warnings were already
    instead of crashing.
 2. **Confidence calibration, empirically checked.** 5 live cascade runs all came back with
    confidence ≥9, including a hallucinated wrong answer to a pi-digit question. That's the
-   overconfidence failure mode from `learning-guide.md`, confirmed rather than assumed. Flipped
+   overconfidence failure mode expected going in, confirmed empirically rather than assumed. Flipped
    on `JUDGE_ALWAYS = True` in `cascade.py` — every answer now goes through the judge instead
    of fast-accepting on a confidence score alone. Re-ran the same pi-digit question: same wrong
    answer, but now correctly flagged `judged_fail` with an accurate reason.
