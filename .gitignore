@@ -5,3 +5,4 @@ __pycache__/
 CLAUDE.md
 # Dated output from eval/run_after_quota_reset.sh
 eval/coding_comparison_*.log
+eval/postreset_*.log
