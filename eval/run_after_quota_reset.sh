@@ -21,7 +21,15 @@ cd "$REPO" || exit 1
   echo "=== exit code: $? ==="
 } >"$OUT" 2>&1
 
-# Remove this job so it runs exactly once.
-crontab -l 2>/dev/null | grep -v 'run_after_quota_reset' | crontab - 2>/dev/null
+# Remove this job so it runs exactly once. Absolute path because cron's PATH is minimal — if
+# `crontab` isn't found here the entry survives and this benchmark quietly burns the daily
+# OpenRouter quota every morning forever, which is a much worse failure than not running at all.
+if [ -x /usr/bin/crontab ]; then
+  /usr/bin/crontab -l 2>/dev/null | grep -v 'run_after_quota_reset' | /usr/bin/crontab - 2>/dev/null \
+    && echo "removed the cron entry; this was a one-shot" >>"$OUT"
+else
+  echo "WARNING: /usr/bin/crontab not found — remove the entry by hand:" >>"$OUT"
+  echo "  crontab -l | grep -v run_after_quota_reset | crontab -" >>"$OUT"
+fi
 
 echo "results in $OUT"

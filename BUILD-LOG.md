@@ -1099,11 +1099,18 @@ correct programs rarely look alike, so "differs from mine" was reading as "wrong
 implementations rejected, with reasons like *"fails to explain the implementation of slicing"* —
 grading the explanation, not the code.
 
-**I stopped short of claiming the fix works.** Repeated runs of the identical prompt gave 0/4 and
-2/4 false fails. Eight cases cannot distinguish those, so the check asserts loose bounds, refuses
-to assert at all on a partial run, and carries a comment saying not to tune the prompt against
-it. The guidance is justified by the mechanism it removes — explanation-grading — not by a number
-I can't reproduce.
+**I stopped short of claiming the fix works.** Four complete runs of the *identical* prompt gave
+false-fail counts of 0, 2, 2 and 0 out of 4, and false-pass counts of 2, 1, 1 and 0. Eight cases
+cannot distinguish those from each other, so the check asserts loose bounds, refuses to assert at
+all on a partial run, and carries a comment telling the next person not to tune the prompt
+against it. The guidance is justified by the mechanism it removes — explanation-grading, which
+was reproducible and is now absent from the reasons — not by a number I can't reproduce.
+
+The temptation here was strong and worth naming: the final run came back 0/4 and 0/4, a perfect
+score, and it would have been very easy to write that down as the result. It's one draw from a
+distribution I had already watched produce 2/4 twice. **A good number from an instrument you have
+just proven is noisy is not evidence; it's the same noise, pointing somewhere flattering.** That
+is the exact mistake #21 exists to record, and I nearly made it again two entries later.
 
 **Takeaways:**
 

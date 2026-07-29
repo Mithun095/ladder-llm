@@ -24,9 +24,15 @@ jobs:
       - run: python -m checks.check_metrics_formatter
       - run: python -m checks.check_json_extraction
       - run: python -m checks.check_error_handling
-      # check_judge_accuracy needs live API calls — run it locally after ANY judge prompt change
+      # check_judge_accuracy and check_judge_coding need live API calls — run BOTH locally after
+      # ANY judge prompt change. They measure the two error types the main benchmark cannot see.
 
-  # check_env, check_llm_client, check_classifier, check_judge, check_cascade, and
-  # eval/run_eval.py all make real API calls and need real GROQ_API_KEY /
+  # check_env, check_llm_client, check_classifier, check_judge, check_cascade,
+  # check_judge_accuracy, check_judge_coding, eval/run_eval.py and
+  # eval/compare_coding_models.py all make real API calls and need real GROQ_API_KEY /
   # OPENROUTER_API_KEY secrets configured in this repo's Actions settings to run in CI.
   # Left out of automated CI for now — run them locally with your own .env.
+  #
+  # check_judge_coding is additionally rate-limit sensitive: it paces itself, but running it
+  # immediately after another live check can still lose a case to a 429. It refuses to assert on
+  # a partial run rather than scoring an unjudged case as a pass.

@@ -98,8 +98,14 @@ def main():
     print(f"{'label':<48}{'runs?':<8}{'judge':<8}verdict")
     print("-" * 78)
     unavailable = 0
+    n_correct = n_wrong = 0
     for label, code in CORRECT + WRONG:
         runs = executes_correctly(code)
+        # Counted here, from the same execution the verdict is compared against. Computing it in
+        # a second pass afterwards would re-run every case, so a denominator could disagree with
+        # its own numerator.
+        n_correct += runs
+        n_wrong += not runs
         time.sleep(PACE_S)
         verdict = judge(QUERY, code, "coding")
         if verdict is None:
@@ -120,8 +126,6 @@ def main():
         if tag != "correct":
             print(f"{'':<64}judge said: {verdict.reason[:80]}")
 
-    n_correct = sum(1 for _, c in CORRECT if executes_correctly(c))
-    n_wrong = len(WRONG)
     print("-" * 78)
     print(f"false FAILS  (rejected code that runs)   : {false_fails}/{n_correct}")
     print(f"false PASSES (approved code that breaks) : {false_passes}/{n_wrong}")
