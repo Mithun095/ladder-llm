@@ -20,7 +20,7 @@ you inflating a number stops listening to everything after it.
 > failed. It classifies difficulty and task type first, then walks a ladder of free models
 > across Groq and OpenRouter instead of always calling the biggest one just in case. On my
 > benchmark it saves about 84% of the active-parameter compute a naive always-biggest-model
-> approach would burn, with two thirds of queries resolving at the cheapest tier. It's the
+> approach would burn, with 14 of 25 benchmark queries resolving at the cheapest tier. It's the
 > FrugalGPT / RouteLLM cascade pattern, built on a fully free-tier stack — and I built an eval
 > harness for it specifically so the savings claim is measured rather than asserted."
 
@@ -71,10 +71,13 @@ hierarchy would be solving a problem I don't have, and every future reader would
 it to learn what one `REGISTRY[(2, "coding")]` tells you at a glance.
 
 **Why measure active params rather than total params?**
-Several models here are Mixture-of-Experts — `gpt-oss-120b` is ~117B total but activates only
-~5.1B per token. Compute cost tracks active params. If I'd recorded 120, the savings metric
-would have been enormous and wrong *in my favour*, and it would have looked great, so nobody
-would have questioned it.
+Because compute cost tracks the parameters that actually fire on a token, and for the
+Mixture-of-Experts models in the ladder that's a small fraction of the total. If I'd recorded a
+model's headline size, the savings metric would have been enormous and wrong *in my favour*, and
+it would have looked great, so nobody would have questioned it. I record total params too, but
+for a different question: active params say what a token costs, total params say roughly what
+the model knows, and the check that a query never *skips* a tier that beats its entry tier on
+both counts can't be written without both numbers.
 
 **Why is your tier 2 a 120B model and your tier 3 a 27B model? Isn't that backwards?**
 *(Ask for this one — it's the best thing in the project.)* It's ordered by price, not by size,
@@ -115,6 +118,8 @@ upgrade path.
 ## Real bugs, STAR format
 
 ### "Tell me about the hardest bug you found."
+
+*Full write-up: [`BUILD-LOG.md` #13](BUILD-LOG.md#13-the-classifier-was-deleting-the-text-it-was-asked-to-summarize).*
 
 **Situation.** Summarization queries were failing the judge almost every time — 0-1 out of 5 —
 in both the cascade and the always-max-tier baseline.
@@ -157,6 +162,8 @@ that one instance, and never asked what else shared the mechanism.
 
 ### "Tell me about a bug that looked real but wasn't."
 
+*Full write-up: [`BUILD-LOG.md` #4](BUILD-LOG.md#4-the-cascade-failed-on-its-very-first-end-to-end-run--and-there-was-no-bug), with its mirror image in [#12](BUILD-LOG.md#12-one-model-returned-malformed-json-on-100-of-queries).*
+
 **Situation.** My first end-to-end cascade run failed outright — both tier 1 and tier 2 returned
 malformed JSON, so my retry-once parsing had failed twice in a row.
 
@@ -179,6 +186,8 @@ reasoning model wrapping its answer in a `<think>` block), and I found it in min
 knew which question to ask.
 
 ### "Tell me about a time you were wrong about your own project."
+
+*Full write-up: [`BUILD-LOG.md` #17](BUILD-LOG.md#17-my-judge-was-failing-correct-answers--and-the-proof-that-it-worked-was-wrong).*
 
 **Situation.** Late in the project I noticed my judge failing answers that were obviously fine.
 The clearest one: for *"A farmer has 17 sheep, all but 9 die, how many are left?"*, the model
@@ -229,6 +238,8 @@ ever checked.)*
 
 ### "Tell me about a time your own metrics lied to you."
 
+*Full write-up: [`BUILD-LOG.md` #11](BUILD-LOG.md#11-100-compute-saved-on-a-query-that-completely-failed), recurring as [#16](BUILD-LOG.md#16-the-savings-metric-was-clamped-hiding-its-own-worst-case) and [#19](BUILD-LOG.md#19-the-same-bug-a-third-time-36-compute-saved-on-an-answer-that-was-rejected).*
+
 **Situation.** The eval harness reported `100% compute saved` on a query that had failed to
 produce any answer at all.
 
@@ -248,6 +259,8 @@ you have to interrogate good numbers at least as hard as bad ones because nobody
 a result they like.
 
 ### "Tell me about a production-style constraint you hit."
+
+*Full write-up: [`BUILD-LOG.md` #14](BUILD-LOG.md#14-hitting-two-different-real-rate-limits).*
 
 **Situation.** Two different rate limits, same day. OpenRouter started returning `unavailable`
 for most queries; later a test script died outright on Groq.
@@ -291,8 +304,10 @@ the judge worked*. That's the story below.
 It measures the gap between stated confidence and actual accuracy: bucket every
 (confidence, verdict) pair by confidence, compare each bucket's mean confidence to its actual
 pass rate, take the weighted mean absolute difference. 0 is perfect. Mine went 0.52 → 0.23 →
-0.13 as I fixed real bugs; the top bucket currently claims 0.95 and delivers 0.82. It's computed
-by my own harness from live runs, and it's why the router doesn't trust self-reported confidence.
+0.13 as I fixed real bugs, and it's 0.279 in the sweep I ship as `eval/results.json`, where the
+top confidence bucket claims 0.97 and delivers 0.69. It's computed by my own harness from live
+runs, and it's why the router doesn't trust self-reported confidence. I'd quote the direction,
+not the digits — see the noise caveat below.
 
 **The part I'd volunteer without being asked:** this ECE measures confidence against my
 *judge's* verdicts, not against ground truth. So when my judge was over-strict and failing
@@ -302,8 +317,8 @@ metric is only as good as its referee. That's a genuine limitation of the whole
 LLM-as-judge approach, and I'd rather state it than have someone find it.
 
 **Q: Why not just always use the biggest model? Simpler and safer.**
-That's literally the baseline in my eval harness — always tier 4, raw query, no classification,
-no escalation. The cascade uses about 84% less active-parameter compute. "Simpler" isn't free
+That's literally the baseline in my eval harness — always tier 4, raw query, no prompt rewrite,
+no escalation, graded by the same judge rubric as the cascade arm. The cascade uses about 84% less active-parameter compute. "Simpler" isn't free
 if it burns 3-10× the compute on queries an 8B model already answers correctly. Worth adding
 honestly: the cascade is also *slower* on escalation, since three sequential round trips beats
 one, so it's a cost/latency tradeoff rather than a free win.
@@ -413,17 +428,21 @@ projects never do.
   ~12-point noise as the pass rate. It shows self-reported confidence is badly calibrated,
   which is the point; the exact value is not stable enough to track.
 - **92.7%** average cost saved versus an always-tier-4 baseline, at published $/token rates;
-  **83.7%** on active parameters. Neither depends on judge verdicts — these are the numbers to
-  lead with.
-- **22 of 25** queries answered acceptably without going past tier 2; **14 resolved at tier 1**,
-  and nothing needed tiers 3 or 4.
+  **83.7%** on active parameters. These are the numbers to lead with — every *per-query* value is
+  computed from which tiers ran and what they cost, with no verdict in the formula. Say the
+  qualifier out loud, though: the average is taken over judge-accepted runs, so the judge selects
+  the population even though it isn't in the arithmetic ([`BUILD-LOG.md` #25](BUILD-LOG.md#25-this-metric-doesnt-depend-on-the-judge--the-per-query-value-didnt-the-average-did)).
+- **22 of 25** queries were answered acceptably: **14 resolved at tier 1**, 8 at tier 2. Across
+  all 25 runs the tiers used were **14 / 10 / 1 / 0** — the three failures escalated, one of them
+  to tier 3. Quote both: where a query *ran* and whether it *passed* are different questions, and
+  giving only the accepted subset erases the failures from the record of where money was spent.
 - Pass rate **88%** on the most recent sweep — but quote it as a range, not a point: two
   identical sweeps scored 72% and 84%, so anything under ~12 points is noise.
 - Head to head on the 16 queries where the tier-4 model was reachable: cascade **14/16**,
   always-tier-4 baseline **10/16**. Directionally good, *not* significant (sign test p ≈ 0.22).
 - Free-tier ceilings: OpenRouter 50 requests/day account-wide (1000/day with a $10 credit);
   Groq 30 requests/minute.
-- 12 self-checks, 5 of which run in CI without needing API keys (the rest need live API access).
+- 13 self-checks, 5 of which run in CI without needing API keys (the rest need live API access).
 - Zero paid APIs, zero GPUs.
 
 ## Things to be honest about if pushed
@@ -438,8 +457,15 @@ projects never do.
   instead of believing it.
 - The judge is the weakest component, and I can quantify how weak: it wrongly approves about
   29% of wrong answers. Every quality number in the project inherits that uncertainty.
-- **The cost numbers do not inherit that uncertainty**, which is why I lead with them. They're
-  computed from which tiers ran and published per-token rates — no verdicts involved. If asked
-  which of my numbers I'd actually defend, it's the cost ones.
+- **The cost numbers inherit much less of that uncertainty**, which is why I lead with them:
+  each per-query value is computed from which tiers ran and published per-token rates, with no
+  verdict in the formula. I used to claim they were judge-*independent* full stop, and that was
+  wrong — the reported figure is a mean over judge-accepted runs, so the judge picks the
+  population even though it touches none of the inputs. I'd volunteer that, because I'd already
+  documented the proof and not connected it: gating on acceptance *moved* the number
+  ([`BUILD-LOG.md` #19](BUILD-LOG.md#19-the-same-bug-a-third-time-36-compute-saved-on-an-answer-that-was-rejected)
+  and [#25](BUILD-LOG.md#25-this-metric-doesnt-depend-on-the-judge--the-per-query-value-didnt-the-average-did)).
+  If asked which of my numbers I'd actually defend, it's still the
+  cost ones.
 - Several results in this repo have been wrong before they were right, and the git history shows
   it. That's the intended impression, not a thing to explain away.

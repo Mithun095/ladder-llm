@@ -55,7 +55,7 @@ model wrapped it in, validates it against a Pydantic schema, and retries once wi
 instruction if that fails. Every JSON-expecting caller (classifier, judge, cascade) goes
 through this one function, which is why fixing extraction once fixed it everywhere.
 
-Getting that extraction right took three attempts and broke twice (`BUILD-LOG.md` #12). Models
+Getting that extraction right took three attempts and broke twice ([`BUILD-LOG.md` #12](BUILD-LOG.md#12-one-model-returned-malformed-json-on-100-of-queries)). Models
 bury their JSON in markdown fences, in chatty preambles, and — for reasoning-tuned models —
 inside a `<think>` block that quotes *draft copies* of the JSON before emitting the real one.
 The working approach doesn't look for any of those wrappers: it scans for every position where
@@ -72,7 +72,7 @@ A transient 429 (Groq's per-minute limit clears in seconds) waits briefly and re
 before giving up; a sustained one (OpenRouter's *daily* free-tier cap) correctly degrades to
 skipping the tier. This handling lives in `call_json()` rather than `call_model()` because the
 classifier and judge call `call_json` directly — putting it one layer up left both of them able
-to crash the app, which they eventually did (`BUILD-LOG.md` #14).
+to crash the app, which they eventually did ([`BUILD-LOG.md` #14](BUILD-LOG.md#14-hitting-two-different-real-rate-limits)).
 
 ## Task 3 — `registry.py`: the tier × task-type grid
 
@@ -85,12 +85,12 @@ translation. Difficulty decides *how far up the ladder to start*. Collapsing
 them into a single "quality" axis would mean either wasting compute on easy queries that
 happen to be a hard *type*, or under-serving genuinely hard queries of an easy type.
 
-**Why `active_params_b` and not `params_b`** — and why, eventually, both. This is the field the whole savings metric is
-built on, and it's the one place a naive number would have quietly inflated every result. Some
-models here are Mixture-of-Experts: `openai/gpt-oss-120b` has ~117B total parameters but a
-router activates only ~5.1B of them per token. Compute cost tracks *active* params, not total.
-Recording 120 instead of 5.1 would have made the savings number look spectacular and be wrong
-(`BUILD-LOG.md` #3).
+**Why `active_params_b` and not `params_b`** — and why, eventually, both. This is the field the
+whole savings metric is built on, and it's the one place a naive number would have quietly
+inflated every result. Several models here are Mixture-of-Experts, where a router activates a
+small subset of the weights per token, so compute cost tracks *active* params and not total.
+Writing 120 for `gpt-oss-120b` instead of 5.1 would have made the savings number look
+spectacular and be wrong ([`BUILD-LOG.md` #3](BUILD-LOG.md#3-counting-moe-models-by-total-parameters-would-have-inflated-my-headline-metric)).
 
 That conclusion was right about cost and then quietly overreached into "total params don't
 matter." They do — just for a different question. `total_params_b` is now recorded alongside,
@@ -98,45 +98,46 @@ because the invariant that catches a bad *entry* tier can't be written without i
 tier is only defensible when the skipped model is smaller, and "smaller" is a statement about
 total parameters, not active ones. Active params say what a token costs; total params say
 roughly what the model knows. Collapsing the two is what let expert queries skip a 117B model to
-open on a 27B one (`BUILD-LOG.md` #22).
+open on a 27B one ([`BUILD-LOG.md` #22](BUILD-LOG.md#22-the-tier-swap-left-a-second-dict-pointing-at-the-old-ladder)).
 
 **Active params are not monotonic with tier number, and for a long time I treated that as an
 interesting quirk instead of the bug it was pointing at.** The original write-up here said tier
 3 QA (`gpt-oss-120b`, 5.1B active) having a *smaller* footprint than tier 2 QA (a dense 27B) was
 "the honest output of ranking tiers by capability while measuring them by compute." That was a
-rationalisation. When I finally checked published per-token rates, tier 3 turned out to be **12×
-cheaper per output token** than the tier 2 it escalated up from — so the cascade was escalating
-*down* the price curve, and `CEILING_TIER` was capping easy/medium queries below a model that
-was both stronger and cheaper. Tiers 2 and 3 are now swapped, and `checks/check_registry.py`
-asserts price monotonicity (`BUILD-LOG.md` #20).
-
-Two lessons compressed into one paragraph:
-
-- **Ordering by "capability" is ordering by vibes.** Ordering by published price is checkable,
-  and it disagreed with my intuition for four of the five task types.
-- **A cost estimate derived from active params can never disprove active params as a cost
-  proxy.** `metrics.py` used to compute dollars *as a function of* `active_params_b`, so it
-  agreed with the ladder by construction. Real published rates were the only thing that could
-  have caught this, and they're now what the registry carries.
+rationalisation. Checking published per-token rates showed the cascade was escalating *down* the
+price curve, into a model that was both smaller and more expensive. Tiers 2 and 3 are now
+swapped and `checks/check_registry.py` asserts price monotonicity; the full price analysis is in
+[README "Why tier 2 is the 120B model"](README.md#why-tier-2-is-the-120b-model) and
+[`BUILD-LOG.md` #20](BUILD-LOG.md#20-the-cascade-was-escalating-down-the-price-curve). The lesson that belongs here is that **ordering by "capability" is ordering
+by vibes** — ordering by published price is checkable, and it disagreed with my intuition for
+four of the five task types.
 
 The related earlier bug — tier-2 summarization at 70B dense, i.e. more expensive than the
 55B-active tier-4 ceiling — was found only after the savings metric stopped clamping negative
-values (`BUILD-LOG.md` #16). Same underlying shape: an unchecked assumption about which
+values ([`BUILD-LOG.md` #16](BUILD-LOG.md#16-the-savings-metric-was-clamped-hiding-its-own-worst-case)). Same underlying shape: an unchecked assumption about which
 direction cost moves as you go up the ladder.
 
 Before any of this was hardcoded, the live model lists were pulled from both providers and every
 grid entry checked against what actually existed. That started as a script that merely *printed*
 both catalogs for manual comparison — which is why it failed to catch a model being delisted
-months later (`BUILD-LOG.md` #2). It's now `checks/check_model_ids.py`, which validates the
+months later ([`BUILD-LOG.md` #2](BUILD-LOG.md#2-model-ids-in-my-design-notes-were-a-runtime-landmine)). It's now `checks/check_model_ids.py`, which validates the
 registry and fails loudly. Run it before trusting a registry you haven't touched in a while.
 
 ## Task 4 — `classifier.py`: the routing decision
 
-One cheap call to `llama-3.1-8b-instant` returns three things:
+One call to `openai/gpt-oss-120b` returns three things:
 
 - `difficulty` — easy / medium / hard / expert → sets the starting tier and the ceiling
 - `type` — qa / coding / reasoning / summarization / translation → selects the model column
 - `optimized_prompt` — the query rewritten to be clearer before any answering model sees it
+
+**It ran on `llama-3.1-8b-instant` for most of the project, and that was the wrong instinct.**
+The 8B model was picked because classification is a cheap pre-step and it is the cheapest thing
+on Groq — which prices the *call* and ignores the *consequence*. The type selects an entire model
+ladder, so a misclassification can send a query to a provider whose daily quota is gone, and the
+query fails with nothing to show. Measured against the benchmark's own type labels, the 8B model
+labelled difficulty consistently on 15 of 25 queries against `gpt-oss-120b`'s 22; the swap costs
+~1.8× per call and ~250ms ([`BUILD-LOG.md` #23](BUILD-LOG.md#23-the-cheapest-model-in-the-system-was-making-the-most-expensive-mistake)).
 
 **The classifier must never fail the request**, since it runs on every query. If the model is
 rate-limited or returns junk, `classify()` falls back to a neutral `medium`/`qa` classification
@@ -144,7 +145,7 @@ with the query passed through untouched — a middle tier still answers, rather 
 request dying before a single model is tried.
 
 **Prompt optimization is deliberately not applied to every type.** This is the correction that
-came out of the single largest bug in the project (`BUILD-LOG.md` #13). Rewriting a query for
+came out of the single largest bug in the project ([`BUILD-LOG.md` #13](BUILD-LOG.md#13-the-classifier-was-deleting-the-text-it-was-asked-to-summarize)). Rewriting a query for
 clarity is safe when the query is *purely an instruction*. It is actively destructive when the
 query carries a **payload** — the text to be summarized or translated — because a paraphrase is
 free to discard that payload and still be a "clearer" sentence:
@@ -173,8 +174,11 @@ addresses the question"* — and that vagueness made it grade presentation inste
 It failed *"The remaining number of sheep is 9, which is less than the original 17"* for "not
 stating the remaining number." Worse, it had been failing a **correct** answer to a pi-digit
 question since the start of the project, and I had that incident written up as evidence the
-judge worked (`BUILD-LOG.md` #17). Fixing the prompt moved the whole benchmark: pass rate
-68% → 72%, compute saved 71.5% → 76.6%, ECE 0.23 → 0.13.
+judge worked ([`BUILD-LOG.md` #17](BUILD-LOG.md#17-my-judge-was-failing-correct-answers--and-the-proof-that-it-worked-was-wrong)). Fixing the prompt moved the whole benchmark: pass rate
+68% → 72%, compute saved 71.5% → 76.6%, ECE 0.23 → 0.13. Those deltas are recorded as history,
+not as evidence — the benchmark's run-to-run spread was later measured at ~12 points, which
+swallows all three of them ([`BUILD-LOG.md` #21](BUILD-LOG.md#21-two-identical-benchmark-runs-scored-72-and-84)). What the change is actually justified by is the
+mechanism it removed: the judge stopped grading presentation.
 
 Two further refinements came from measurement, not design:
 
@@ -182,7 +186,10 @@ Two further refinements came from measurement, not design:
   reasoning, where there's one right answer. It misfires on summarization and translation,
   where the standard is faithfulness, not literal correctness — it will fault a good summary
   for omitting a secondary detail, which is the entire point of summarizing. `TYPE_GUIDANCE`
-  adds a per-type sentence for those two.
+  adds a per-type sentence for those two — and later for coding, once coding tiers moved to Groq
+  and became reachable enough to measure: against execution ground truth the judge was rejecting
+  3 of 4 working implementations for grading the explanation rather than the code
+  ([`BUILD-LOG.md` #24](BUILD-LOG.md#24-a-whole-task-type-with-no-fallback-and-a-benchmark-that-measured-the-wrong-thing)).
 - **An unavailable judge accepts rather than escalates.** If the judge can't return a verdict,
   the answer is accepted and marked *unverified* in the trace. Escalating instead would spend a
   bigger tier only to hit the same broken judge one rung up — strictly more expensive, same
@@ -198,10 +205,14 @@ The core loop, and the hardest piece to get right.
 |---|---|---|
 | easy / medium | tier 1 | tier 2 |
 | hard | tier 2 | tier 3 |
-| expert | tier 3 | tier 4 |
+| expert | tier 2 | tier 4 |
 
-Harder queries get both a higher floor (don't waste a round-trip on a model that will obviously
-fail) and a higher ceiling (allowed to spend more before giving up).
+A higher floor says "don't waste a round-trip on a model that will obviously fail"; a higher
+ceiling says "allowed to spend more before giving up". Hard and expert now share a floor and
+differ only in the ceiling — expert used to enter at tier 3, which was right while tier 3 held
+the largest model and became strictly worse after the tier 2/3 swap put a cheaper, larger model
+at tier 2 ([`BUILD-LOG.md` #22](BUILD-LOG.md#22-the-tier-swap-left-a-second-dict-pointing-at-the-old-ladder)). How far a query may *climb* is the part difficulty should
+actually control.
 
 **Confidence: designed, measured, demoted.** The original design had the answering model
 self-rate its confidence 1-10 in the same JSON as the answer, and trusted that number at the
@@ -212,7 +223,7 @@ you're already making) while the judge costs a whole second call.
 **That design is no longer live.** In testing, confidence came back 9 or 10 on *every single
 call*, on correct and incorrect answers alike. The 5-7 band was never reached, so the judge
 never fired, so every answer was fast-accepted on a number carrying no information.
-`JUDGE_ALWAYS = True` disables both shortcuts and judges every answer (`BUILD-LOG.md` #7).
+`JUDGE_ALWAYS = True` disables both shortcuts and judges every answer ([`BUILD-LOG.md` #7](BUILD-LOG.md#7-self-reported-confidence-was-9-10-on-every-single-call)).
 Confidence is still collected — it's the raw material for the calibration metric below — it's
 just no longer trusted as a routing decision. Measured properly later, the top confidence
 bucket claims ~0.98 and delivers ~0.75.
@@ -221,20 +232,27 @@ The shortcut code stays in the file behind the flag on purpose: "here is the des
 is the measurement that killed it" is more useful than a file that pretends the idea was never
 tried.
 
-**Three distinct failure modes, three distinct statuses.** This is where most of the
-difficulty lives — every trace step records which of these happened:
+**Distinct failure modes, distinct statuses.** This is where most of the difficulty lives —
+every trace step records which of these happened:
 
 | status | meaning | compute charged? |
 |---|---|---|
-| `accepted` | judge passed it (or judge unavailable → unverified) | yes |
+| `accepted` | judge looked at it and passed it | yes |
+| `accepted_unverified` | model answered, the judge itself was down or unparseable | yes |
 | `judged_fail` | model answered, judge rejected it → escalate | yes |
 | `escalated` | confidence below threshold (only when `JUDGE_ALWAYS=False`) | yes |
 | `malformed_response` | model ran but its output wouldn't parse → escalate | **yes** |
 | `unavailable` | provider returned 429/503, model never ran → skip tier | **no** |
 
 The last two rows are the subtle ones and getting them wrong produced a real metrics bug
-(`BUILD-LOG.md` #11): a malformed response means the model *did* run and burn tokens, so it
+([`BUILD-LOG.md` #11](BUILD-LOG.md#11-100-compute-saved-on-a-query-that-completely-failed)): a malformed response means the model *did* run and burn tokens, so it
 must be charged. Only a provider rejection is genuinely free.
+
+`accepted_unverified` is kept separate from `accepted` for the same reason. Showing an unjudged
+answer to a user is reasonable — it is the best thing available. Scoring it as a benchmark pass
+is not, because then a sweep that loses judge calls to a rate limit reports a *higher* pass rate
+than one that checked everything ([`BUILD-LOG.md` #24](BUILD-LOG.md#24-a-whole-task-type-with-no-fallback-and-a-benchmark-that-measured-the-wrong-thing)). `CascadeResult` exposes both readings:
+`accepted` for anything user-facing, `verified` for anything being measured.
 
 **An exact-match query cache** sits in front of the whole thing. A repeat query costs zero LLM
 calls — not even the classifier, which every query otherwise pays for. It's a normalized-string
@@ -257,12 +275,16 @@ for that task type.
 genuinely can cost more than the baseline — expert coding enters at tier 2 and can climb to 4,
 burning 5.1B + 14B + 55B = 74.1B against a 55B baseline, i.e. −34.7%. Clamping that to "0% saved" would make the
 routing's worst case permanently invisible, which is exactly the kind of flattering default
-that had already produced two wrong numbers in this project (`BUILD-LOG.md` #16).
+that had already produced two wrong numbers in this project ([`BUILD-LOG.md` #16](BUILD-LOG.md#16-the-savings-metric-was-clamped-hiding-its-own-worst-case)).
 
-There's also an illustrative dollar figure, computed from a documented approximate per-active-
-billion-param rate. It's marked as illustrative in the code, the UI and the README, because
-these are free models with no real bill — its only job is to make the abstract active-param
-number legible to someone who doesn't think in parameters.
+There's also a dollar figure, computed from the published $/1M-token rates the registry now
+carries per model — with the invented per-active-billion-param constant kept only as a fallback
+for the one model with no paid listing anywhere to cite (tier-3 coding's `laguna-s`). It's marked as illustrative in
+the code, the UI and the README, because these are free models with no real bill; its only job is
+to make the abstract active-param number legible to someone who doesn't think in parameters.
+Deriving it from `active_params_b` instead, as it originally was, is what let the tier inversion
+survive — a cost estimate that is a *function of* active params can never disagree with them
+([`BUILD-LOG.md` #20](BUILD-LOG.md#20-the-cascade-was-escalating-down-the-price-curve)).
 
 `formatter.py` is pure presentation: wrap a coding answer in a code fence if the model didn't,
 render a multi-line translation as a small table.
@@ -279,7 +301,7 @@ character typed. So the call is gated behind `if submit and query`, and the resu
 `st.session_state` so it survives the rerun that clicking Submit itself causes.
 
 Run it with `PYTHONPATH=. streamlit run src/app.py` — plain `streamlit run src/app.py` raises
-`ModuleNotFoundError: No module named 'src'`, for reasons in `BUILD-LOG.md` #5.
+`ModuleNotFoundError: No module named 'src'`, for reasons in [`BUILD-LOG.md` #5](BUILD-LOG.md#5-modulenotfounderror-no-module-named-src--only-in-streamlit).
 
 The UI shows the trace rather than just the answer on purpose. The answer is what a user wants;
 the trace — which models were tried, what the judge said about each, how long each took, what
@@ -291,7 +313,9 @@ Rather than assuming the design's warnings were handled, each was probed directl
 unavailable-tier path (via a mocked 503, after discovering that a fake model ID produces a 400
 and *shouldn't* be caught), the confidence calibration assumption (which failed, and changed
 the design), and a full check-suite re-run that caught a classifier flip-flop. All three are
-written up in `BUILD-LOG.md` #6, #7 and #8.
+written up in [`BUILD-LOG.md` #6](BUILD-LOG.md#6-simulating-an-outage-with-a-fake-model-id-taught-me-the-wrong-lesson-at-first),
+[#7](BUILD-LOG.md#7-self-reported-confidence-was-9-10-on-every-single-call) and
+[#8](BUILD-LOG.md#8-the-classifier-flip-flopped-on-a-query-it-had-gotten-right-before).
 
 Confirmed `.env` was never staged or committed (`git log --all -- .env` returns nothing).
 
@@ -302,27 +326,36 @@ Confirmed `.env` was never staged or committed (`git log --all -- .env` returns 
 Everything above makes the system *work*. This round makes its central claim *checkable*.
 
 **`eval/` — the benchmark harness.** 25 queries across all five task types. Each runs through
-the full cascade **and** through an always-max-tier baseline (raw query, no classification, no
-prompt optimization, no escalation — the naive approach the whole project argues against). Both
-are judged, and the harness reports cascade pass rate against baseline pass rate against
-compute saved. That's the same quality/cost tradeoff shape RouteLLM's paper reports, and it's
+the full cascade **and** through an always-max-tier baseline: the raw query straight to the
+biggest model, no prompt rewrite, no escalation — the naive approach the whole project argues
+against. Both arms are graded by the same task-type-aware judge rubric, so the comparison is
+about routing rather than grading, and the harness reports cascade pass rate against baseline
+pass rate against compute saved. That's the same quality/cost tradeoff shape RouteLLM's paper reports, and it's
 the difference between "it saves compute" as an assertion and as a measurement.
 
-Savings are averaged only over queries that actually produced an answer — a query where every
-tier was rate-limited burns zero compute and scores "100% saved", which is true and completely
-misleading.
+Savings are averaged only over runs the judge *accepted* — not merely over runs where some model
+emitted text. A query where every tier was rate-limited burns zero compute and scores "100%
+saved", which is true and completely misleading; a query that burns two tiers and gets both
+rejected delivered nothing, and crediting it with "36% saved" inflates the headline with the
+price of failure ([`BUILD-LOG.md` #19](BUILD-LOG.md#19-the-same-bug-a-third-time-36-compute-saved-on-an-answer-that-was-rejected)). The cost of that gate is that the judge chooses the
+population, so the *average* inherits the judge's instability even though no individual value
+does — the correction is in [`BUILD-LOG.md` #25](BUILD-LOG.md#25-this-metric-doesnt-depend-on-the-judge--the-per-query-value-didnt-the-average-did) and in the README's Results section.
 
 **`eval/calibration.py` — Expected Calibration Error.** ECE measures the gap between stated
 confidence and actual accuracy: bucket every (confidence, verdict) pair by confidence, compare
 each bucket's average confidence against its actual pass rate, and take the weighted mean
 absolute difference. 0 is perfect calibration. This turns the hand-wavy "models are
 overconfident" observation into a number that can be tracked and compared across changes — and
-it moved measurably as real bugs were fixed, 0.52 → 0.23 → 0.13.
+it moved measurably as real bugs were fixed, 0.52 → 0.23 → 0.13. It is 0.279 in the sweep shipped
+as `eval/results.json`. Do not read that as a regression: ECE is computed from judge verdicts, so
+it carries the same ~12-point run-to-run noise as the pass rate ([`BUILD-LOG.md` #21](BUILD-LOG.md#21-two-identical-benchmark-runs-scored-72-and-84)). What the
+number establishes is that self-reported confidence is badly calibrated; its exact value is not
+stable enough to track.
 
 One caveat belongs with it: this ECE compares confidence against the **judge's** verdicts, not
 against ground truth. An over-strict judge failing correct answers inflates the apparent
 overconfidence, so part of that improvement was the judge getting less wrong rather than the
-models getting better calibrated (`BUILD-LOG.md` #17). The metric is only as good as its referee.
+models getting better calibrated ([`BUILD-LOG.md` #17](BUILD-LOG.md#17-my-judge-was-failing-correct-answers--and-the-proof-that-it-worked-was-wrong)). The metric is only as good as its referee.
 
 **`eval/judge_ground_truth.py` + `checks/check_judge_accuracy.py` — measuring the referee.**
 Everything above is scored by the judge, and the judge is a component that gets tuned. That
@@ -331,7 +364,7 @@ the router improve, or did the grading get easier? These 14 hand-labelled cases 
 known-correct verdicts, so they measure the judge directly, and they report its two error types
 separately because those aren't equally bad — a **false pass** hands the user a wrong answer, a
 **false fail** only wastes compute escalating. Measuring it found a 57% false-pass rate the main
-benchmark had no way to reveal (`BUILD-LOG.md` #18). Run this check after any change to the
+benchmark had no way to reveal ([`BUILD-LOG.md` #18](BUILD-LOG.md#18-the-judge-wasnt-judging--it-was-agreeing-and-my-benchmark-couldnt-tell)). Run this check after any change to the
 judge's prompt.
 
 **CI** (`.github/workflows/checks.yml`) runs every check that doesn't need live API keys on

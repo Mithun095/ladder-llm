@@ -49,9 +49,9 @@ flowchart TD
     MET --> OUT["<b>Streamlit UI</b><br/>answer + routing trace + cost"]
 ```
 
-**Two axes, not one.** Task *type* decides which model is good at the work — a model good at code is not
-automatically good at translation.
-*Difficulty* decides how far up the ladder to start, and how far it's allowed to climb:
+**Two axes, not one.** Task *type* decides which model is good at the work — a model good at
+code is not automatically good at translation. *Difficulty* decides how far up the ladder to
+start, and how far it's allowed to climb:
 
 | difficulty | starts at | ceiling |
 |---|---|---|
@@ -63,14 +63,15 @@ Hard and expert both *enter* at tier 2; what difficulty controls is how far they
 Expert used to enter at tier 3, which was right when tier 3 held the biggest model — after the
 tier 2/3 swap it meant expert queries skipped a 117B model to open on a 27B one costing 11×
 more. `checks/check_registry.py` now fails if any difficulty starts at a tier that a skipped
-tier beats on **both** price and size ([`BUILD-LOG.md` #22](BUILD-LOG.md)).
+tier beats on **both** price and size ([`BUILD-LOG.md` #22](BUILD-LOG.md#22-the-tier-swap-left-a-second-dict-pointing-at-the-old-ladder)).
 
-**Three failure modes, kept distinct.** Conflating these produces wrong answers *and* wrong
-metrics — a provider outage must never be read as a bad answer:
+**A tier's outcome is never collapsed into "worked" or "failed".** Conflating these produces
+wrong answers *and* wrong metrics — a provider outage must never be read as a bad answer:
 
 | trace status | meaning | compute charged? |
 |---|---|---|
-| `accepted` | judge passed it | yes |
+| `accepted` | judge looked at it and passed it | yes |
+| `accepted_unverified` | model answered, judge was down or unparseable → show it, don't score it | yes |
 | `judged_fail` | model answered, judge rejected it → escalate | yes |
 | `malformed_response` | model ran, output wouldn't parse → escalate | **yes** — tokens were burned |
 | `unavailable` | provider returned 429/503, model never ran → skip tier | **no** |
@@ -86,15 +87,16 @@ there behind a flag — [`DEVLOG.md`](DEVLOG.md) explains why.
 
 All 20 entries are validated against both providers' **live** catalogs by
 `checks/check_model_ids.py` — which earned its keep by catching a model that got delisted
-mid-project. Sizes are *active* parameters per token, not total, which matters for
-Mixture-of-Experts models like `gpt-oss-120b` (~117B total, ~5.1B active).
+mid-project. Sizes below are *active* parameters per token, not total — for the sparse
+Mixture-of-Experts models in the grid those are very different numbers, which is the whole
+subject of the next section.
 
 | Tier | QA | Coding | Reasoning | Summarization | Translation |
 |---|---|---|---|---|---|
 | **1 — Nano** | Groq `llama-3.1-8b-instant` (8B) | Groq `openai/gpt-oss-20b` (3.6B active) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) |
-| **2 — Small** | Groq `gpt-oss-120b` (5.1B active) | Groq `openai/gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
-| **3 — Large** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
-| **4 — Max** | OR `nemotron-3-ultra-550b-a55b:free` (55B active) | same | same | same | same |
+| **2 — Small** | Groq `openai/gpt-oss-120b` (5.1B active) | Groq `openai/gpt-oss-120b` (5.1B active) | Groq `openai/gpt-oss-120b` (5.1B active) | Groq `openai/gpt-oss-120b` (5.1B active) | Groq `openai/gpt-oss-120b` (5.1B active) |
+| **3 — Large** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nvidia/nemotron-3-super-120b-a12b:free` (12B active) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
+| **4 — Max** | OR `nvidia/nemotron-3-ultra-550b-a55b:free` (55B active) | same | same | same | same |
 
 *(OR = OpenRouter, all `:free`)*
 
@@ -108,7 +110,7 @@ per-token rates for the paid listings of the same open-weight models:
 | 1 | `llama-3.1-8b-instant` | 8B | 0.050 | 0.080 |
 | 2 | `openai/gpt-oss-120b` | **5.1B** | **0.037** | **0.170** |
 | 3 | `qwen/qwen3.6-27b` | 27B | 0.300 | 2.000 |
-| 4 | `nemotron-3-ultra-550b-a55b` | 55B | 0.500 | 2.200 |
+| 4 | `nvidia/nemotron-3-ultra-550b-a55b:free` | 55B | 0.500 | 2.200 |
 
 `gpt-oss-120b` is a sparse Mixture-of-Experts model: ~117B total parameters, but only ~5.1B are
 activated per token. `qwen3.6-27b` is dense — all 27B fire on every token. So the 120B model is
@@ -119,7 +121,7 @@ Tiers 2 and 3 were originally the other way round, ordered by total parameter co
 the cascade escalate *down* the price curve, and — because `CEILING_TIER` stops easy and medium
 queries at tier 2 — left it structurally unable to reach a model that was both better and
 cheaper. `checks/check_registry.py` now asserts price monotonicity so it can't silently invert
-again. Full write-up: [BUILD-LOG #20](BUILD-LOG.md).
+again. Full write-up: [BUILD-LOG #20](BUILD-LOG.md#20-the-cascade-was-escalating-down-the-price-curve).
 
 **The two cost metrics genuinely disagree, and the app reports both.** Active params say tier 1
 (8B) costs more than tier 2 (5.1B); published price says the opposite. Neither is wrong — active
@@ -183,12 +185,12 @@ made per-run by a model, so tiers can vary by one between runs.
 | `Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data, with tech stocks leading the decline before a late recovery on Friday.` | **payload preservation** | summarizes *that text* — not general stock-market commentary |
 | `Translate 'Where is the nearest train station?' to Spanish` | payload preservation | `¿Dónde está la estación de tren más cercana?` — translated, not answered |
 | *(submit any of the above twice)* | **cache** | second run: green cache banner, 0 model calls, 0.0s |
-| `Write a Python function that checks if a string is a palindrome` | coding | answers at tier 1 or 2 on Groq. Coding used to run on OpenRouter at every tier, so it died completely whenever the daily cap was gone — [`BUILD-LOG.md` #24](BUILD-LOG.md) |
+| `Write a Python function that checks if a string is a palindrome` | coding | answers at tier 1 or 2 on Groq. Coding used to run on OpenRouter at every tier, so it died completely whenever the daily cap was gone — [`BUILD-LOG.md` #24](BUILD-LOG.md#24-a-whole-task-type-with-no-fallback-and-a-benchmark-that-measured-the-wrong-thing) |
 
 The two payload-preservation prompts are the ones worth understanding: both used to fail — the
 summarizer would talk about the stock market from memory, and the translator would try to
 *answer* "where is the nearest train station?" — because the classifier's prompt-rewrite step
-was paraphrasing away the text it was given ([`BUILD-LOG.md` #13](BUILD-LOG.md)).
+was paraphrasing away the text it was given ([`BUILD-LOG.md` #13](BUILD-LOG.md#13-the-classifier-was-deleting-the-text-it-was-asked-to-summarize)).
 
 When no tier's answer passes the judge, the UI says so explicitly and labels the output
 **"Best attempt (rejected)"** with the judge's reason, rather than presenting a rejected answer
@@ -197,12 +199,17 @@ as if it were verified.
 ## Results
 
 From `eval/run_eval.py` — 25 queries across all five task types, each run through the full
-cascade **and** through an always-tier-4 baseline (raw query, no classification, no escalation).
+cascade **and** through an always-tier-4 baseline: the raw query straight to the biggest model,
+no prompt rewrite, no escalation. Both arms are graded by the same task-type-aware judge rubric,
+so the comparison is about routing and not about grading.
 
 > **These numbers were measured before three later changes** — the expert entry-tier fix
-> ([#22](BUILD-LOG.md)), the classifier swap to `gpt-oss-120b` ([#23](BUILD-LOG.md)), and moving
-> the coding tiers to Groq ([#24](BUILD-LOG.md)). All three change routing, so tier distribution
-> and both savings figures will move. They are **not** re-measured here because a sweep run today
+> ([#22](BUILD-LOG.md#22-the-tier-swap-left-a-second-dict-pointing-at-the-old-ladder)),
+> the classifier swap to `gpt-oss-120b`
+> ([#23](BUILD-LOG.md#23-the-cheapest-model-in-the-system-was-making-the-most-expensive-mistake)),
+> and moving the coding tiers to Groq
+> ([#24](BUILD-LOG.md#24-a-whole-task-type-with-no-fallback-and-a-benchmark-that-measured-the-wrong-thing)).
+> All three change routing, so tier distribution and both savings figures will move. They are **not** re-measured here because a sweep run today
 > would report every OpenRouter tier as `unavailable` — the free daily quota is exhausted — and
 > that degradation has nothing to do with the changes. Re-run `python -m eval.run_eval` after the
 > 00:00 UTC reset for a clean number. Saying which config a number belongs to is cheaper than
@@ -220,8 +227,9 @@ cascade **and** through an always-tier-4 baseline (raw query, no classification,
 on which tiers ran, not on the judge's opinion of anything." That is true of each *per-query*
 value and false of the *average*, because the average is taken over the runs the judge accepted
 (`eval/run_eval.py` accumulates them under `if cascade_ok`). The judge picks the population, so
-the mean inherits the judge's instability — and [`BUILD-LOG.md` #19](BUILD-LOG.md) records that
-introducing exactly this gate *moved the number*, because rejected runs are the ones that
+the mean inherits the judge's instability — and
+[`BUILD-LOG.md` #19](BUILD-LOG.md#19-the-same-bug-a-third-time-36-compute-saved-on-an-answer-that-was-rejected)
+records that introducing exactly this gate *moved the number*, because rejected runs are the ones that
 escalate furthest and cost most. Both savings figures are less noisy than the pass rate, since
 each individual value is judge-free; neither is immune.
 
@@ -239,24 +247,26 @@ Per task type, from the same run:
 |---|---|
 | QA | **5/5** |
 | Reasoning | **5/5** |
-| Summarization | **5/5** (was **0/5** before the prompt-payload fix — [`BUILD-LOG.md` #13](BUILD-LOG.md)) |
+| Summarization | **5/5** (was **1/5** before the prompt-payload fix — [`BUILD-LOG.md` #13](BUILD-LOG.md#13-the-classifier-was-deleting-the-text-it-was-asked-to-summarize)) |
 | Translation | 4/5 |
 | Coding | 3/5 |
 
 *(Per-type totals shift between runs because the classifier assigns the type, and it isn't
 deterministic — a query counted under QA in one sweep can land under reasoning in the next.)*
 
-### The pass rate is noise. The savings are not.
+### The pass rate is dominated by noise
 
 Two **identical** sweeps — same code, same queries, same config — scored **72% and 84%**. Five
 of 25 queries flipped verdict, and the classifier relabelled some queries' difficulty in
 between. So this benchmark cannot resolve any difference smaller than about 12 points, and the
 88% above is one draw from a wide distribution, not an improvement over the 72% this README used
 to quote. I found this by running an A/B test that returned a suspiciously perfect result and
-re-running the *control* instead of believing it ([`BUILD-LOG.md` #21](BUILD-LOG.md)).
+re-running the *control* instead of believing it ([`BUILD-LOG.md` #21](BUILD-LOG.md#21-two-identical-benchmark-runs-scored-72-and-84)).
 
-The savings figures don't have this problem. They're computed from which tiers ran and published
-per-token rates — no verdicts involved.
+The savings figures are steadier, because no verdict appears anywhere in a per-query value —
+it is which tiers ran, priced at published per-token rates. They are not immune, though: the
+reported number is a mean over judge-accepted runs, so the judge still chooses the population.
+See the correction above.
 
 ### Versus the always-max-tier baseline
 
@@ -289,8 +299,9 @@ a provider outage as a baseline failure would hand the cascade a win it didn't e
 
 This is the most important caveat in the project, and it's why there's a second harness.
 
-Pass rate, compute saved and ECE are all computed from **judge verdicts**. The judge is also a
-component I tune. So when a change to the judge's prompt made every one of those numbers improve
+Pass rate and ECE are computed directly from **judge verdicts**; the two savings averages are
+selected by them. The judge is also a component I tune. So when a change to the judge's prompt
+made every one of those numbers improve
 at once, the benchmark could not tell me whether the router got better or the grading just got
 easier — it is structurally incapable of distinguishing those.
 
@@ -307,21 +318,24 @@ A 29% false-pass rate is bad, and stating it is the point. It was **57%** before
 `17 * 23 = 371`, the judge replied *"the answer to the multiplication of 17 and 23 is correctly
 stated as 371."* It wasn't verifying, it was ratifying whatever it was shown and inventing
 justification afterwards. The fix was to make it commit to its own answer *before* it's allowed
-to render a verdict ([`BUILD-LOG.md` #18](BUILD-LOG.md)); that halved the harmful error rate at
+to render a verdict ([`BUILD-LOG.md` #18](BUILD-LOG.md#18-the-judge-wasnt-judging--it-was-agreeing-and-my-benchmark-couldnt-tell)); that halved the harmful error rate at
 no cost to the wasteful one.
 
 **What this means for the headline numbers:** treat the pass rate as "the share of answers this
 judge approved," with a judge known to wrongly approve about 29% of wrong answers — and with a
 run-to-run spread of about 12 points on top of that. Two independent sources of error stack on
-the same number. The savings figures are unaffected: they're counted from which tiers ran and
-what those models cost, not from verdicts.
+the same number. The savings figures carry only the second-hand version of this — see the
+correction above.
 
-**Read `eval/results.json` with the caveats it records.** Queries where every tier was
-rate-limited are excluded from the savings average — they burn zero compute and would otherwise
-score a meaningless "100% saved". The baseline arm reports `n/a` rather than 0% when the tier-4
-model was unreachable, because scoring an outage as a baseline failure would credit the cascade
-for a provider problem. Since tier 4 is OpenRouter for every task type, the head-to-head baseline
-comparison needs free-tier quota headroom — see Limitations.
+**Read `eval/results.json` with the caveats it records.** The savings average covers accepted
+runs only, which is what excludes a query where every tier was rate-limited: it burns zero
+compute and would otherwise score a meaningless "100% saved", and a rejected run that escalated
+twice would charge the average with the price of failure. Per-query `compute_saved_pct` is
+`null` on those rows rather than 0, so the two cases stay distinguishable in the file. The
+baseline arm reports `n/a` rather than 0% when the tier-4 model was unreachable, because scoring
+an outage as a baseline failure would credit the cascade for a provider problem. Since tier 4 is
+OpenRouter for every task type, the head-to-head baseline comparison needs free-tier quota
+headroom — see [Limitations](#limitations).
 
 ## Running it
 
@@ -353,8 +367,9 @@ src/
   metrics.py      compute saved (unclamped) and an illustrative $ figure
   formatter.py    per-task-type answer presentation
   app.py          Streamlit UI
-checks/           one assert-based script per concern; 5 of 12 run in CI without API keys
-eval/             25-query benchmark harness, calibration (ECE), and judge ground truth
+checks/           one assert-based script per concern; 5 of 13 run in CI without API keys
+eval/             25-query benchmark harness, calibration (ECE), judge ground truth, and
+                  compare_coding_models.py — which scores coding models by *running* their output
 ```
 
 No pytest — each check is a plain script you run with `python -m checks.check_x` that prints
@@ -375,8 +390,11 @@ matters is that everything has something that fails loudly when it breaks.
   it's real ground truth — for coding, that means running the tests.
 - **The benchmark is 25 self-authored queries.** It's a good bug-finding instrument (it found
   five real bugs in its first run) and a weak statistical claim.
-- **Dollar savings are illustrative** — a documented approximate rate, not per-model billing.
-  These are free models with no bill to reconcile against.
+- **Dollar savings are illustrative.** They use each model's published $/1M-token rate — a real
+  external price, but for the *paid* listing of the same open-weight model, since everything
+  called here is a free endpoint with no bill to reconcile against. One model — tier-3 coding's
+  `poolside/laguna-s-2.1` — has no paid listing anywhere and falls back to an estimate from
+  active params.
 - **The cache is exact-match, in-process.** Paraphrases miss, and it's cleared on restart.
 
 ## How this was built
@@ -384,14 +402,15 @@ matters is that everything has something that fails loudly when it breaks.
 Every real bug, debugging step and design decision was logged as it happened — including the
 ones where the first diagnosis was wrong:
 
-- **[`BUILD-LOG.md`](BUILD-LOG.md)** — a debugging casebook. 16 issues, each as
-  symptom → how I found the cause → root cause → fix → takeaway. Only about half were bugs in
-  code; the rest were bugs in a prompt, a metric, a test, or an assumption.
+- **[`BUILD-LOG.md`](BUILD-LOG.md)** — a debugging casebook. 25 issues, each as
+  symptom → how I found the cause → root cause → fix → takeaway. Only about a third were bugs in
+  code; the rest were bugs in a prompt, a metric, a test, a comment, or an assumption.
 - **[`DEVLOG.md`](DEVLOG.md)** — what got built and why, module by module, with the concepts
   explained.
 - **[`INTERVIEW-PREP.md`](INTERVIEW-PREP.md)** — project walkthrough, design rationale and a
   full anticipated Q&A.
 
-The single most useful entry is `BUILD-LOG.md` #13, where a documented "fix" turned out to be a
-wrong root cause that had produced a small improvement — the most effective disguise a wrong
-diagnosis has.
+The single most useful entry is
+[`BUILD-LOG.md` #13](BUILD-LOG.md#13-the-classifier-was-deleting-the-text-it-was-asked-to-summarize),
+where a documented "fix" turned out to be a wrong root cause that had produced a small
+improvement — the most effective disguise a wrong diagnosis has.
