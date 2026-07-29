@@ -50,15 +50,25 @@ if "result" in st.session_state:
         elif result.trace and all(s.status == "unavailable" for s in result.trace):
             # Almost always the free-tier daily cap rather than a real outage. Saying so beats
             # making the reader cross-reference the trace against the README's limitations.
-            providers = "OpenRouter" if all("/" in s.model_id for s in result.trace) else "the provider"
+            #
+            # Provider comes from the registry, not from guessing at the model ID. The previous
+            # version tested `"/" in model_id`, which was right until Groq's own catalogue turned
+            # out to use slashes too — it would have labelled `openai/gpt-oss-120b`, a Groq model,
+            # as OpenRouter and blamed the wrong quota.
+            providers = {get_model(s.tier, result.type).provider for s in result.trace}
+            who = ("OpenRouter" if providers == {"openrouter"}
+                   else "Groq" if providers == {"groq"} else "both providers")
+            limits = {
+                "OpenRouter": "**50 requests per day, account-wide** on unpaid accounts, which "
+                              "resets at 00:00 UTC",
+                "Groq": "**30 requests per minute**, which clears on its own within the minute",
+            }.get(who, "a free-tier quota")
             st.error(
                 f"**No model was reachable for this query.** Every tier in range returned "
                 f"429/503, so nothing ran and no compute was spent.\n\n"
-                f"On a free tier this is usually the quota, not an outage — {providers} caps "
-                f"unpaid accounts at **50 requests per day, account-wide**, and Groq at 30 per "
-                f"minute. Coding queries route to OpenRouter at tiers 1-3, so they're the first "
-                f"to fail once the daily cap is gone. This is the cascade degrading as designed "
-                f"rather than crashing; see Limitations in the README."
+                f"On a free tier this is usually the quota, not an outage — {who} caps you at "
+                f"{limits}. This is the cascade degrading as designed rather than crashing; "
+                f"see Limitations in the README."
             )
         else:
             st.error(

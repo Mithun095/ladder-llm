@@ -197,6 +197,15 @@ as if it were verified.
 From `eval/run_eval.py` — 25 queries across all five task types, each run through the full
 cascade **and** through an always-tier-4 baseline (raw query, no classification, no escalation).
 
+> **These numbers were measured before three later changes** — the expert entry-tier fix
+> ([#22](BUILD-LOG.md)), the classifier swap to `gpt-oss-120b` ([#23](BUILD-LOG.md)), and moving
+> the coding tiers to Groq ([#24](BUILD-LOG.md)). All three change routing, so tier distribution
+> and both savings figures will move. They are **not** re-measured here because a sweep run today
+> would report every OpenRouter tier as `unavailable` — the free daily quota is exhausted — and
+> that degradation has nothing to do with the changes. Re-run `python -m eval.run_eval` after the
+> 00:00 UTC reset for a clean number. Saying which config a number belongs to is cheaper than
+> discovering later that it belonged to none of them.
+
 | Metric | Value | Noise-sensitive? |
 |---|---|---|
 | Avg. **cost** saved vs. always-tier-4 (published $/token rates) | **92.7%** | no |

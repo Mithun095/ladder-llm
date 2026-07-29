@@ -1029,6 +1029,95 @@ for the most consequential decision" costs cents.
    about to write code against.
 
 
+## 24. A whole task type with no fallback, and a benchmark that measured the wrong thing
+
+**Symptom** — coding queries failed completely, repeatedly, on the deployed app. Every tier
+`unavailable`, no answer, nothing to show.
+
+**Root cause** — coding ran on OpenRouter at all four tiers. OpenRouter's free tier caps
+`free-models-per-day` **account-wide**, so when it runs out there is no coding path at all. Every
+other task type had Groq at tiers 1-2 and degraded gracefully; coding had no fallback and simply
+died. A single provider outage took out 20% of the system's functionality.
+
+```
+429  cohere/north-mini-code:free      Rate limit exceeded: free-models-per-day
+429  poolside/laguna-xs-2.1:free      Rate limit exceeded: free-models-per-day
+429  poolside/laguna-s-2.1:free       Rate limit exceeded: free-models-per-day
+429  nvidia/nemotron-3-ultra-550b:free Rate limit exceeded: free-models-per-day
+```
+
+**Choosing replacements without the judge** — the judge false-passes ~29% of wrong answers (#18)
+and swings ~12 points run to run (#21). On five coding queries that noise is larger than any real
+difference between models, so it cannot rank them. Generated code, though, can simply be **run**:
+`eval/compare_coding_models.py` gives each model tasks with assertions and executes the result.
+Ground truth, no verdicts.
+
+**The first version of that benchmark was wrong, in this project's favourite way.** It reported:
+
+```
+llama-3.3-70b-versatile   0/12 =  0.0%
+llama-3.1-8b-instant      8/12 = 66.7%
+openai/gpt-oss-20b       12/12 = 100.0%
+```
+
+which reads as "llama-3.3-70b cannot write code". It writes code fine. It never emits the JSON
+envelope `ANSWER_SYSTEM_PROMPT` requires, so no response ever parsed. Splitting the two failure
+modes apart:
+
+| model | JSON envelope ok | code correct (of parseable) |
+|---|---|---|
+| `openai/gpt-oss-20b` | **12/12** | 12/12 |
+| `openai/gpt-oss-120b` | **12/12** | 12/12 |
+| `qwen/qwen3.6-27b` | 11/12 | 11/11 |
+| `llama-3.1-8b-instant` | 8/12 | 8/8 |
+| `llama-3.3-70b-versatile` | **0/12** | unmeasured |
+
+**Every model that parsed wrote 100% correct code.** So the tasks are too easy to rank coding
+ability, and the number I nearly published as a coding ranking was entirely a JSON-compliance
+ranking. Both matter — a model that can't produce the envelope is unusable in this cascade no
+matter how good its code is — but they are different facts, and one number for both is the same
+conflation as #19.
+
+**What this does and doesn't establish.** The OpenRouter code-specialised models were unreachable
+throughout, so this shows the Groq models are *viable*, not that they *beat* the incumbents.
+`laguna-s` stays at tier 3 rather than being dropped on the assumption that specialised beats
+general. A cron job runs the full comparison after the next quota reset.
+
+**And then coding became reachable enough to find the next bug.** With tiers 1-2 on Groq, a
+palindrome query got working code rejected at tier 1:
+
+> *"The provided answer is correct in functionality but the proposed answer includes an incorrect
+> code comment."*
+
+The judge said the code was functionally correct and failed it anyway — over a comment. `TYPE_GUIDANCE`
+had entries for summarization and translation, added after each was measured failing, and none for
+coding, because coding had never been reachable enough to measure. Step 1 of the base prompt
+("answer the question yourself first") means *write your own implementation* for code, and two
+correct programs rarely look alike, so "differs from mine" was reading as "wrong".
+
+`checks/check_judge_coding.py` scores the judge against execution. Baseline: 3 of 4 working
+implementations rejected, with reasons like *"fails to explain the implementation of slicing"* —
+grading the explanation, not the code.
+
+**I stopped short of claiming the fix works.** Repeated runs of the identical prompt gave 0/4 and
+2/4 false fails. Eight cases cannot distinguish those, so the check asserts loose bounds, refuses
+to assert at all on a partial run, and carries a comment saying not to tune the prompt against
+it. The guidance is justified by the mechanism it removes — explanation-grading — not by a number
+I can't reproduce.
+
+**Takeaways:**
+
+1. **Every task type needs a path that survives its primary provider.** Four tiers of redundancy
+   are zero redundancy if all four are one account's quota.
+2. **When a benchmark reports 0%, suspect the harness before the subject.** A capable model
+   scoring zero is nearly always a measurement fault.
+3. **Being able to run the artifact beats any judge.** Execution is the only ground truth in this
+   project that costs nothing and never drifts. Where output is executable, use it.
+4. **Pacing is part of correctness in a rate-limited harness.** Unjudged cases weren't counted as
+   errors, so hitting the limit made the score look *better*. A measurement that improves when it
+   collects less data is broken.
+
+
 ---
 
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a
