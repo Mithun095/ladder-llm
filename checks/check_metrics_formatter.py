@@ -56,6 +56,40 @@ for _type in TASK_TYPES:
     assert trace_cost_usd([TraceStep(tier=1, model_id="m", status="unavailable")], _type) == 0
     assert trace_cost_usd([], _type) == 0
 
+# Only accepted runs are cached. Caching a judge-rejected answer makes it permanent: the judge
+# flips roughly one verdict in five between identical runs, so a retry would often succeed — but
+# a cached failure means no retry ever happens.
+#
+# Driven through the real run_cascade with its three model calls stubbed out, so this exercises
+# the actual caching condition rather than restating the property it depends on. No network.
+import src.cascade as _cascade
+from src.classifier import ClassifierResult
+
+
+def _run_with_stubbed_models(verdict_word):
+    _cascade._CACHE.clear()
+    real = (_cascade.classify, _cascade.call_model, _cascade.judge)
+    _cascade.classify = lambda q: ClassifierResult(
+        difficulty="easy", type="qa", optimized_prompt=q)
+    _cascade.call_model = lambda cfg, s, u, schema: _cascade.AnswerResult(
+        answer="some answer", confidence=9)
+    _cascade.judge = lambda q, a, t=None: type(
+        "V", (), {"verdict": verdict_word, "reason": "stub"})()
+    try:
+        out = _cascade.run_cascade("a stubbed query", use_cache=True)
+        return out, len(_cascade._CACHE)
+    finally:
+        _cascade.classify, _cascade.call_model, _cascade.judge = real
+        _cascade._CACHE.clear()
+
+
+_res, _cached = _run_with_stubbed_models("fail")
+assert not _res.accepted, "stub should have produced a rejected run"
+assert _cached == 0, "a judge-rejected run must not be cached — a retry could pass"
+
+_res, _cached = _run_with_stubbed_models("pass")
+assert _res.accepted and _cached == 1, "an accepted run must be cached"
+
 assert format_answer("def f(): pass", "coding").startswith("```")
 assert format_answer("hello", "coding") == "```\nhello\n```" or "```" in format_answer("hello", "coding")
 

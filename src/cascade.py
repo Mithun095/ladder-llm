@@ -188,7 +188,15 @@ def run_cascade(query: str, use_cache: bool = True) -> CascadeResult:
         optimized_prompt=prompt,
         elapsed_ms=_ms_since(started),
     )
-    if use_cache and last_answer:
+    # Cache accepted runs only. This used to be `if last_answer:`, which is the same
+    # "is there a string?" test that shipped as a bug three times already (BUILD-LOG #11, #16,
+    # #19) — a judge-rejected answer is still a string, so failures were being cached too.
+    #
+    # It matters more here than elsewhere. The judge is non-deterministic enough to flip roughly
+    # one verdict in five between identical runs (#21), so a query that failed once would often
+    # pass on a retry — except the cache served it the stored failure forever, and no retry could
+    # ever happen. Caching a failure converts a transient wrong verdict into a permanent one.
+    if use_cache and result.accepted:
         _CACHE[key] = result
     return result
 
