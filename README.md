@@ -86,15 +86,39 @@ Mixture-of-Experts models like `gpt-oss-120b` (~117B total, ~5.1B active).
 | Tier | QA | Coding | Reasoning | Summarization | Translation |
 |---|---|---|---|---|---|
 | **1 — Nano** | Groq `llama-3.1-8b-instant` (8B) | OR `cohere/north-mini-code:free` (~7B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) |
-| **2 — Small** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-xs-2.1:free` (~7B) | Groq `qwen/qwen3.6-27b` (27B) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
-| **3 — Large** | Groq `gpt-oss-120b` (5.1B active) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
+| **2 — Sparse** | Groq `gpt-oss-120b` (5.1B active) | OR `poolside/laguna-xs-2.1:free` (~7B) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
+| **3 — Dense** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
 | **4 — Max** | OR `nemotron-3-ultra-550b-a55b:free` (55B active) | same | same | same | same |
 
 *(OR = OpenRouter, all `:free`)*
 
-Note that tier 3 QA is **cheaper** than tier 2 QA in active params. That isn't a mistake — it's
-the honest result of ranking tiers by capability while measuring them by compute, and it's the
-whole reason the registry tracks active rather than total parameters.
+### Why tier 2 is the 120B model
+
+Because it is the cheapest model in the ladder. That sounds backwards, so here are the published
+per-token rates for the paid listings of the same open-weight models:
+
+| tier | model | active params | $/1M in | $/1M out |
+|---|---|---|---|---|
+| 1 | `llama-3.1-8b-instant` | 8B | 0.050 | 0.080 |
+| 2 | `openai/gpt-oss-120b` | **5.1B** | **0.037** | **0.170** |
+| 3 | `qwen/qwen3.6-27b` | 27B | 0.300 | 2.000 |
+| 4 | `nemotron-3-ultra-550b-a55b` | 55B | 0.500 | 2.200 |
+
+`gpt-oss-120b` is a sparse Mixture-of-Experts model: ~117B total parameters, but only ~5.1B are
+activated per token. `qwen3.6-27b` is dense — all 27B fire on every token. So the 120B model is
+about **12× cheaper per output token than the 27B model**, and "bigger model" stops meaning
+"more expensive model" the moment MoE enters the ladder.
+
+Tiers 2 and 3 were originally the other way round, ordered by total parameter count. That made
+the cascade escalate *down* the price curve, and — because `CEILING_TIER` stops easy and medium
+queries at tier 2 — left it structurally unable to reach a model that was both better and
+cheaper. `checks/check_registry.py` now asserts price monotonicity so it can't silently invert
+again. Full write-up: [BUILD-LOG #20](BUILD-LOG.md).
+
+**The two cost metrics genuinely disagree, and the app reports both.** Active params say tier 1
+(8B) costs more than tier 2 (5.1B); published price says the opposite. Neither is wrong — active
+params measure compute, price measures what the market charges for it, and sparse models are
+exactly where the two come apart. The ladder is ordered by price.
 
 ## Demo
 
@@ -122,6 +146,10 @@ run 3   tier 1  llama-3.1-8b-instant  → judged_fail (confidence 10)
         tier 2  qwen/qwen3.6-27b      → judged_fail (confidence 10)
                 judge: "The proposed answer contradicts the own answer."
 ```
+
+*(Recorded before the tier 2/3 swap described above, which is why tier 2 here is
+`qwen3.6-27b` — today that model sits at tier 3. Left verbatim rather than re-run and
+tidied, because these are observed traces and run 3 is the point.)*
 
 Run 1 is the system working as designed: tier 1 fails, tier 2 answers correctly, escalation
 stops. Run 2 shows tier 1 getting it right on its own. **Run 3 is the honest failure**, and it's

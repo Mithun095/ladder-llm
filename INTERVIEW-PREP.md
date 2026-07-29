@@ -74,12 +74,29 @@ it to learn what one `REGISTRY[(2, "coding")]` tells you at a glance.
 Several models here are Mixture-of-Experts — `gpt-oss-120b` is ~117B total but activates only
 ~5.1B per token. Compute cost tracks active params. If I'd recorded 120, the savings metric
 would have been enormous and wrong *in my favour*, and it would have looked great, so nobody
-would have questioned it. A consequence I chose to show rather than hide: active params aren't
-monotonic with tier number, so tier 3 QA is genuinely *cheaper* than tier 2 QA.
+would have questioned it.
+
+**Why is your tier 2 a 120B model and your tier 3 a 27B model? Isn't that backwards?**
+*(Ask for this one — it's the best thing in the project.)* It's ordered by price, not by size,
+and for sparse models those are different orderings. `gpt-oss-120b` publishes at $0.037/$0.170
+per million tokens in/out; the dense `qwen3.6-27b` publishes at $0.300/$2.000. **The 120B model
+is about 12× cheaper per output token than the 27B one**, because it activates ~4% of its
+parameters per token while the dense model activates all of them.
+
+I had it the other way round for most of the project, ranked by total parameters. That meant the
+cascade escalated *down* the price curve — and since `CEILING_TIER` stops easy and medium queries
+at tier 2, the router was structurally unable to reach a model that was simultaneously better
+and cheaper. `checks/check_registry.py` now asserts that escalating never gets cheaper.
+
+The thing I'd want to be asked next: **why didn't my own cost metric catch it?** Because
+`metrics.py` computed dollars as `active_params_b × a constant I made up`. It was a *function of*
+the thing it was supposed to be auditing, so it could never disagree with it. It now carries
+published per-token rates per model. Active params and price disagree about tier 1 vs tier 2, so
+the app reports both rather than picking the flattering one.
 
 **Why does the savings metric allow negative numbers?**
 Because a cascade that escalates far enough really can cost more than one direct max-tier call
-— expert coding is 32B at tier 3 plus 55B at tier 4 against a 55B baseline, i.e. −58%. It was
+— expert coding is 14B at tier 3 plus 55B at tier 4 against a 55B baseline, i.e. −25%. It was
 clamped at zero originally, which made the routing's worst case permanently invisible.
 Unclamping it immediately exposed a second bug: tier-2 summarization was a 70B dense model, more
 expensive than the tier-4 ceiling it was measured against. **The clamp had been hiding a real
@@ -305,6 +322,10 @@ Yes, and it caught me. I changed the judge's prompt and every benchmark number i
 "the router got better" and "the grading got easier," and my benchmark was structurally
 incapable of telling me which, because the judge scores every query in it.
 
+*(Worth adding if they press: I later measured the run-to-run noise and it's about 12 points, so
+that 68→72% "improvement" was inside the error bars anyway. Two problems stacked — the metric
+was circular **and** underpowered. I'd caught the first and not the second.)*
+
 So I built the measurement the judge doesn't control: 14 hand-labelled cases with known-correct
 verdicts, and I measure the judge's two error types separately, because they aren't equally bad
 — a **false pass** hands the user a wrong answer, a **false fail** only wastes compute
@@ -398,8 +419,16 @@ projects never do.
 
 - The 25-query benchmark is small and self-authored. It is a bug-finding instrument first and a
   statistical claim a distant second.
+- **The benchmark is noise-dominated, and I measured the noise.** Two identical sweeps — same
+  code, same queries, same config — scored 72% and 84%. Five of 25 queries flipped verdict, and
+  the classifier relabelled some queries' difficulty between runs. So the pass rate cannot
+  resolve anything smaller than about 12 points, and I quote it as a range. I found this because
+  an A/B test returned a result that was too good (100%), which made me re-run the control
+  instead of believing it.
 - The judge is the weakest component, and I can quantify how weak: it wrongly approves about
-  29% of wrong answers. Every quality number in the project inherits that uncertainty. The
-  compute-savings figure does not — it's counted from active parameters, not verdicts.
+  29% of wrong answers. Every quality number in the project inherits that uncertainty.
+- **The cost numbers do not inherit that uncertainty**, which is why I lead with them. They're
+  computed from which tiers ran and published per-token rates — no verdicts involved. If asked
+  which of my numbers I'd actually defend, it's the cost ones.
 - Several results in this repo have been wrong before they were right, and the git history shows
   it. That's the intended impression, not a thing to explain away.

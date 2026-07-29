@@ -92,13 +92,29 @@ router activates only ~5.1B of them per token. Compute cost tracks *active* para
 Recording 120 instead of 5.1 would have made the savings number look spectacular and be wrong
 (`BUILD-LOG.md` #3).
 
-A consequence worth stating rather than hiding: **active params are not monotonic with tier
-number.** Tier 3 QA (`gpt-oss-120b`, 5.1B active) has a *smaller* compute footprint than tier 2
-QA (a dense 27B). That looks like a mistake and isn't — it's the honest output of ranking tiers
-by capability while measuring them by compute. The one case that *was* a genuine bug — tier-2
-summarization at 70B dense, i.e. more expensive than the 55B-active tier-4 ceiling — was found
-only after the savings metric stopped clamping negative values, and fixed by swapping in a 27B
-model (`BUILD-LOG.md` #16).
+**Active params are not monotonic with tier number, and for a long time I treated that as an
+interesting quirk instead of the bug it was pointing at.** The original write-up here said tier
+3 QA (`gpt-oss-120b`, 5.1B active) having a *smaller* footprint than tier 2 QA (a dense 27B) was
+"the honest output of ranking tiers by capability while measuring them by compute." That was a
+rationalisation. When I finally checked published per-token rates, tier 3 turned out to be **12×
+cheaper per output token** than the tier 2 it escalated up from — so the cascade was escalating
+*down* the price curve, and `CEILING_TIER` was capping easy/medium queries below a model that
+was both stronger and cheaper. Tiers 2 and 3 are now swapped, and `checks/check_registry.py`
+asserts price monotonicity (`BUILD-LOG.md` #20).
+
+Two lessons compressed into one paragraph:
+
+- **Ordering by "capability" is ordering by vibes.** Ordering by published price is checkable,
+  and it disagreed with my intuition for four of the five task types.
+- **A cost estimate derived from active params can never disprove active params as a cost
+  proxy.** `metrics.py` used to compute dollars *as a function of* `active_params_b`, so it
+  agreed with the ladder by construction. Real published rates were the only thing that could
+  have caught this, and they're now what the registry carries.
+
+The related earlier bug — tier-2 summarization at 70B dense, i.e. more expensive than the
+55B-active tier-4 ceiling — was found only after the savings metric stopped clamping negative
+values (`BUILD-LOG.md` #16). Same underlying shape: an unchecked assumption about which
+direction cost moves as you go up the ladder.
 
 Before any of this was hardcoded, the live model lists were pulled from both providers and every
 grid entry checked against what actually existed. That started as a script that merely *printed*

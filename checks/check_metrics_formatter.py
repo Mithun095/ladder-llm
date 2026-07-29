@@ -18,7 +18,7 @@ print(f"burned={burned}B, saved={pct:.1f}%")
 # the max-tier baseline it's measured against, and that has to show up as a negative number
 # rather than being rounded up to "0% saved".
 expensive = [
-    TraceStep(tier=3, model_id="tier3", status="judged_fail", confidence=9, active_params_b=32),
+    TraceStep(tier=3, model_id="tier3", status="judged_fail", confidence=9, active_params_b=14),
     TraceStep(tier=4, model_id="tier4", status="accepted", confidence=9, active_params_b=55),
 ]
 assert compute_saved_pct(expensive, "coding") < 0, "cascade costing more than baseline must report negative savings"
