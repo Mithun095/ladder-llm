@@ -47,9 +47,12 @@ for difficulty in DIFFICULTIES:
         # the one you land on, because then there is no bet: the skipped tier wins on both axes.
         #
         # This is exactly what `expert` did. It started at tier 3 (qwen3.6-27b: 27B total,
-        # $0.43/query) and skipped tier 2 (gpt-oss-120b: 117B total, $0.038/query) — cheaper and
-        # 4x the parameters. The "too weak to bother with" justification cannot apply to a model
-        # that is bigger than the one you chose instead.
+        # $0.00043/query) and skipped tier 2 (gpt-oss-120b: 117B total, $0.00004/query) —
+        # cheaper and 4x the parameters. (Those are per-query costs for one ~300-token
+        # exchange, the unit model_cost_usd returns; BUILD-LOG #22 tabulates the same ratio
+        # per 1k queries, and the figures were briefly copied across without rescaling.)
+        # The "too weak to bother with" justification cannot apply to a model that is bigger
+        # than the one you chose instead.
         entry = get_model(start, task_type)
         for skipped_tier in range(1, start):
             skipped = get_model(skipped_tier, task_type)

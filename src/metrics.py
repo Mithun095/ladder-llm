@@ -21,9 +21,10 @@ def total_active_params_burned(trace: list[TraceStep]) -> float:
 
 def compute_saved_pct(trace: list[TraceStep], task_type: str) -> float:
     """Deliberately NOT clamped at 0. A cascade that escalates through several tiers can burn
-    more active params than one direct max-tier call would have (e.g. expert-difficulty coding:
-    14B at tier 3 + 55B at tier 4 = 69B vs. a 55B baseline). Clamping that to "0% saved" would
-    hide the routing's genuine worst case; showing -25% is the honest number."""
+    more active params than one direct max-tier call would have. Worst case today is
+    expert-difficulty coding, which enters at tier 2 and can climb to 4:
+    5.1B + 14B + 55B = 74.1B against a 55B baseline, i.e. **-34.7%**. Clamping that to
+    "0% saved" would hide the routing's genuine worst case."""
     baseline = get_model(MAX_TIER, task_type).active_params_b
     used = total_active_params_burned(trace)
     return (baseline - used) / baseline * 100

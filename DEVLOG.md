@@ -79,9 +79,9 @@ to crash the app, which they eventually did (`BUILD-LOG.md` #14).
 A plain dict mapping `(tier, task_type)` → `ModelConfig`. Four tiers, five task types, 20
 entries.
 
-**Why two dimensions and not one.** Task *type* decides which model is good at the work — a
-coding-specialised 7B model beats a general 8B model at writing code, and neither ranking is
-transferable to translation. Difficulty decides *how far up the ladder to start*. Collapsing
+**Why two dimensions and not one.** Task *type* decides which model is good at the work, and
+that ranking is not transferable — being good at code says nothing about being good at
+translation. Difficulty decides *how far up the ladder to start*. Collapsing
 them into a single "quality" axis would mean either wasting compute on easy queries that
 happen to be a hard *type*, or under-serving genuinely hard queries of an easy type.
 
@@ -254,8 +254,8 @@ steps, which never ran) and compares that against what a single max-tier call wo
 for that task type.
 
 **The savings number is deliberately not clamped at zero.** A cascade that escalates far enough
-genuinely can cost more than the baseline — expert coding hitting 32B at tier 3 then 55B at
-tier 4 is 87B against a 55B baseline, i.e. −58%. Clamping that to "0% saved" would make the
+genuinely can cost more than the baseline — expert coding enters at tier 2 and can climb to 4,
+burning 5.1B + 14B + 55B = 74.1B against a 55B baseline, i.e. −34.7%. Clamping that to "0% saved" would make the
 routing's worst case permanently invisible, which is exactly the kind of flattering default
 that had already produced two wrong numbers in this project (`BUILD-LOG.md` #16).
 

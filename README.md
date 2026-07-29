@@ -28,7 +28,7 @@ savings claim is **measured rather than asserted**.
 flowchart TD
     Q[User query] --> C{Exact-match<br/>cache hit?}
     C -->|yes| OUT
-    C -->|no| CL["<b>Classifier</b> — llama-3.1-8b-instant<br/>difficulty × task type"]
+    C -->|no| CL["<b>Classifier</b> — openai/gpt-oss-120b<br/>difficulty × task type"]
     CL --> RW{"Query carries<br/>a payload?"}
     RW -->|"summarization / translation"| RAW["Send query verbatim<br/><i>rewriting would delete the payload</i>"]
     RW -->|"everything else"| OPT["Send rewritten prompt"]
@@ -49,8 +49,8 @@ flowchart TD
     MET --> OUT["<b>Streamlit UI</b><br/>answer + routing trace + cost"]
 ```
 
-**Two axes, not one.** Task *type* decides which model is good at the work — a coding-specialised
-7B beats a general 8B at writing code, and that ranking doesn't transfer to translation.
+**Two axes, not one.** Task *type* decides which model is good at the work — a model good at code is not
+automatically good at translation.
 *Difficulty* decides how far up the ladder to start, and how far it's allowed to climb:
 
 | difficulty | starts at | ceiling |
@@ -91,8 +91,8 @@ Mixture-of-Experts models like `gpt-oss-120b` (~117B total, ~5.1B active).
 
 | Tier | QA | Coding | Reasoning | Summarization | Translation |
 |---|---|---|---|---|---|
-| **1 — Nano** | Groq `llama-3.1-8b-instant` (8B) | OR `cohere/north-mini-code:free` (~7B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) |
-| **2 — Small** | Groq `gpt-oss-120b` (5.1B active) | OR `poolside/laguna-xs-2.1:free` (~7B) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
+| **1 — Nano** | Groq `llama-3.1-8b-instant` (8B) | Groq `openai/gpt-oss-20b` (3.6B active) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) |
+| **2 — Small** | Groq `gpt-oss-120b` (5.1B active) | Groq `openai/gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
 | **3 — Large** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
 | **4 — Max** | OR `nemotron-3-ultra-550b-a55b:free` (55B active) | same | same | same | same |
 
@@ -128,7 +128,9 @@ exactly where the two come apart. The ladder is ordered by price.
 
 ## Demo
 
-**A coding query resolved at tier 1 — the cheapest model handled it, 87% compute saved:**
+**A coding query resolved at tier 1 — the cheapest model handled it:**
+
+*(Screenshot predates the coding-tier move to Groq; the caption used to quote 87% compute saved, which was the figure for the 7B model that used to sit at tier 1. Tier-1 coding is now 3.6B active, i.e. ~93%.)*
 
 ![Coding query resolved at tier 1](output_images/Screenshot%20From%202026-07-28%2017-04-45.png)
 
@@ -181,7 +183,7 @@ made per-run by a model, so tiers can vary by one between runs.
 | `Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data, with tech stocks leading the decline before a late recovery on Friday.` | **payload preservation** | summarizes *that text* — not general stock-market commentary |
 | `Translate 'Where is the nearest train station?' to Spanish` | payload preservation | `¿Dónde está la estación de tren más cercana?` — translated, not answered |
 | *(submit any of the above twice)* | **cache** | second run: green cache banner, 0 model calls, 0.0s |
-| `Write a Python function that checks if a string is a palindrome` | coding — **needs OpenRouter quota** | tiers 1-3 for coding are OpenRouter; with the daily cap exhausted this correctly shows `unavailable` on each tier and a "no usable answer" banner |
+| `Write a Python function that checks if a string is a palindrome` | coding | answers at tier 1 or 2 on Groq. Coding used to run on OpenRouter at every tier, so it died completely whenever the daily cap was gone — [`BUILD-LOG.md` #24](BUILD-LOG.md) |
 
 The two payload-preservation prompts are the ones worth understanding: both used to fail — the
 summarizer would talk about the stock market from memory, and the translator would try to
@@ -206,20 +208,30 @@ cascade **and** through an always-tier-4 baseline (raw query, no classification,
 > 00:00 UTC reset for a clean number. Saying which config a number belongs to is cheaper than
 > discovering later that it belonged to none of them.
 
-| Metric | Value | Noise-sensitive? |
+| Metric | Value | Judge-dependent? |
 |---|---|---|
-| Avg. **cost** saved vs. always-tier-4 (published $/token rates) | **92.7%** | no |
-| Avg. **compute** saved vs. always-tier-4 (active params) | **83.7%** | no |
-| Where queries resolved | **14 at tier 1**, 8 at tier 2, 0 above | barely |
-| Cascade pass rate | **88%** (22/25) — but see below | **yes** |
+| Avg. **cost** saved vs. always-tier-4 (published $/token rates) | **92.7%** | partly — see below |
+| Avg. **compute** saved vs. always-tier-4 (active params) | **83.7%** | partly — see below |
+| Where queries resolved (all 25) | **14 at tier 1**, 10 at tier 2, 1 at tier 3 | barely |
+| Cascade pass rate | **88%** (22/25) | **yes** |
 | Confidence calibration (ECE) | 0.279 — 0 is perfect calibration | **yes** |
 
-The two savings figures are the ones to trust: they depend only on which tiers ran, not on the
-judge's opinion of anything. The bottom two are judge-scored and noisy — read the next section
-before quoting them.
+**A correction to what this README used to claim.** It said the two savings figures "depend only
+on which tiers ran, not on the judge's opinion of anything." That is true of each *per-query*
+value and false of the *average*, because the average is taken over the runs the judge accepted
+(`eval/run_eval.py` accumulates them under `if cascade_ok`). The judge picks the population, so
+the mean inherits the judge's instability — and [`BUILD-LOG.md` #19](BUILD-LOG.md) records that
+introducing exactly this gate *moved the number*, because rejected runs are the ones that
+escalate furthest and cost most. Both savings figures are less noisy than the pass rate, since
+each individual value is judge-free; neither is immune.
 
-**22 of 25 queries were answered acceptably without ever going past tier 2**, and none needed
-tiers 3 or 4 at all.
+**22 of 25 queries were answered acceptably, 14 of them by the cheapest model on the ladder.**
+The tier row above covers all 25 runs, including the 3 that failed — one of which climbed to
+tier 3 before being rejected. An earlier version of this table showed `14 / 8 / 0`, which was the
+accepted-only subset: it summed to 22 inside a table about 25, and erased the failures from the
+record of where the cascade actually spent money. Where a query *ran* and whether it *passed* are
+different questions, and a table that answers one while looking like it answers both is the same
+population-mixing this project keeps having to correct.
 
 Per task type, from the same run:
 

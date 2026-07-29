@@ -26,8 +26,9 @@ class ModelConfig:
 # - dense models (llama, qwen, gemma-non-MoE): active == total.
 # - nvidia nemotron "*-aNb" suffix names the active param count directly (e.g. a55b = 55B active).
 # - gpt-oss-120b is a real MoE: ~117B total, ~5.1B active/token.
-# - poolside/cohere "mini"/"xs"/"s" sizes have no published param count; estimated from naming
-#   (mini/xs ~7B, s ~14B) as a rough size-class approximation, not a cited figure.
+# - poolside "s" size has no published param count; estimated from naming (~14B) as a rough
+#   size-class approximation, not a cited figure. laguna-s is the only such model left — the
+#   cohere "mini" and poolside "xs" entries went with the coding-tier move to Groq (#24).
 #
 # Tiers 2 and 3 used to be the other way round for qa/reasoning/summarization/translation, on the
 # assumption that a bigger *total* param count means a more expensive tier. Checking published
@@ -65,8 +66,13 @@ REGISTRY: dict[tuple[int, str], ModelConfig] = {
     (2, "summarization"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
     (2, "translation"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
 
-    # Tier 3 is the dense-model slot: fewer total params than tier 2 but every one of them active
-    # on every token, which is why it costs several times more per token despite being "smaller".
+    # Tier 3 is where price climbs. For qa/summarization (qwen3.6-27b) and coding (laguna-s) that
+    # is because the model is DENSE — fewer total params than tier 2, but every one active on
+    # every token. It is NOT a uniform "dense slot": reasoning's nemotron-3-super (12B active /
+    # 120B total) and translation's gemma-4-26b-a4b (4B active / 26B total) are both sparse, and
+    # gemma activates FEWER params than tier 2 while still costing twice as much. Density
+    # explains two of these five rows; published price is what actually orders all of them, and
+    # for those two rows price and active params point in opposite directions.
     (3, "qa"): ModelConfig("groq", "qwen/qwen3.6-27b", 27, 27, 0.300, 2.000),
     # The one code-specialised model still in the ladder. Kept at tier 3 rather than dropped:
     # it may well beat the general Groq models above it on hard coding tasks, but that is

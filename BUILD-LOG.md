@@ -1125,6 +1125,51 @@ is the exact mistake #21 exists to record, and I nearly made it again two entrie
    collects less data is broken.
 
 
+## 25. "This metric doesn't depend on the judge" — the per-query value didn't, the average did
+
+**What the README claimed**, in a table with a column headed *Noise-sensitive?* marked `no`:
+
+> The two savings figures are the ones to trust: they depend only on which tiers ran, not on the
+> judge's opinion of anything.
+
+**Why it was wrong.** Each *per-query* savings value really is judge-free — it is computed from
+which tiers ran and what those models cost. But the reported number is a *mean*, and
+`eval/run_eval.py` accumulates it under `if cascade_ok`. The judge decides which runs enter the
+average. The judge therefore selects the population, and the mean inherits every bit of the
+judge's instability even though not one of its inputs does.
+
+Worse, I had already documented the proof and not connected it. Entry #19 records that adding
+that exact gate **moved the number** — savings went *up*, because rejected runs escalate furthest
+and cost most. A number that moves when you change the judge's gate is not independent of the
+judge. I wrote both claims within a few hours of each other.
+
+**The general shape**, which is worth more than the fix: *a statistic can be independent of X at
+the level of each observation and dependent on X at the level of the sample.* Selection is a
+channel. Checking that no term in your formula mentions the judge does not tell you the judge
+isn't in the answer — you also have to ask who chose the rows.
+
+**Three smaller instances of the same carelessness, found in the same pass:**
+
+- The tier-distribution row read `14 at tier 1, 8 at tier 2, 0 above` in a table about 25
+  queries. It summed to 22 — the accepted-only subset — so the three failures vanished from the
+  record of where the cascade actually spent money, and "0 above" was false: one query climbed to
+  tier 3 before being rejected. Where a query *ran* and whether it *passed* are different
+  questions.
+- `Illustrative $ saved: $X across 25 queries`, summed under `if cascade_ok`, i.e. over 22.
+- `checks/check_judge_coding.py` incremented its denominators before the `continue` that skips an
+  ungraded case, so a rate limit inflated the denominator without being able to reach the
+  numerator — biasing the judge's error rates *downward*, in the file that exists to measure the
+  judge honestly.
+
+**Takeaways:**
+
+1. **For any rate, name the population out loud.** Three of these four bugs are one question
+   unasked: *what exactly is the denominator, and who decided membership?*
+2. **"Independent of X" needs checking at the sample level, not just the formula level.**
+3. Documentation drifts fastest right after the code is most correct. Every one of these was
+   written *while* fixing something real, which is exactly when it feels safe not to re-read.
+
+
 ---
 
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a

@@ -19,14 +19,14 @@ you inflating a number stops listening to everything after it.
 > and escalates to a bigger one only when a judge model confirms the cheap answer actually
 > failed. It classifies difficulty and task type first, then walks a ladder of free models
 > across Groq and OpenRouter instead of always calling the biggest one just in case. On my
-> benchmark it saves about 77% of the active-parameter compute a naive always-biggest-model
+> benchmark it saves about 84% of the active-parameter compute a naive always-biggest-model
 > approach would burn, with two thirds of queries resolving at the cheapest tier. It's the
 > FrugalGPT / RouteLLM cascade pattern, built on a fully free-tier stack — and I built an eval
 > harness for it specifically so the savings claim is measured rather than asserted."
 
 ## The 2-minute walkthrough
 
-1. **A query comes in.** A small model (`llama-3.1-8b-instant`) classifies it on two axes —
+1. **A query comes in.** A classifier (`openai/gpt-oss-120b`) sorts it on two axes —
    difficulty (easy/medium/hard/expert) and task type (qa/coding/reasoning/summarization/
    translation) — and, for instruction-only queries, rewrites it into a cleaner prompt.
 2. **A registry picks the model.** A plain dict keyed on `(tier, task_type)`. Difficulty sets
@@ -46,8 +46,8 @@ query costs zero LLM calls — not even the classifier."*
 ## Why each decision, in your own words
 
 **Why classify difficulty *and* type, not one "quality" score?**
-Type decides *which* model is good at the work — a coding-specialised 7B beats a general 8B at
-writing code, and that ranking doesn't transfer to translation. Difficulty decides *how far up
+Type decides *which* model is good at the work, and that ranking doesn't transfer across types —
+being good at code says nothing about being good at translation. Difficulty decides *how far up
 the ladder to start*. Collapsing them means either wasting compute on easy queries that happen
 to be a hard type, or under-serving hard queries of an easy type.
 
@@ -96,7 +96,8 @@ the app reports both rather than picking the flattering one.
 
 **Why does the savings metric allow negative numbers?**
 Because a cascade that escalates far enough really can cost more than one direct max-tier call
-— expert coding is 14B at tier 3 plus 55B at tier 4 against a 55B baseline, i.e. −25%. It was
+— expert coding enters at tier 2 and can climb to 4: 5.1B + 14B + 55B = 74.1B against a 55B
+baseline, i.e. −34.7%. It was
 clamped at zero originally, which made the routing's worst case permanently invisible.
 Unclamping it immediately exposed a second bug: tier-2 summarization was a 70B dense model, more
 expensive than the tier-4 ceiling it was measured against. **The clamp had been hiding a real
@@ -302,7 +303,7 @@ LLM-as-judge approach, and I'd rather state it than have someone find it.
 
 **Q: Why not just always use the biggest model? Simpler and safer.**
 That's literally the baseline in my eval harness — always tier 4, raw query, no classification,
-no escalation. The cascade uses about 77% less active-parameter compute. "Simpler" isn't free
+no escalation. The cascade uses about 84% less active-parameter compute. "Simpler" isn't free
 if it burns 3-10× the compute on queries an 8B model already answers correctly. Worth adding
 honestly: the cascade is also *slower* on escalation, since three sequential round trips beats
 one, so it's a cost/latency tradeoff rather than a free win.
