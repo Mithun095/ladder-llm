@@ -1,0 +1,37 @@
+# Deployment config, in the repo rather than only in the Render dashboard.
+#
+# Before this file the build and start commands existed only as dashboard settings — invisible
+# in code review, absent from git history, and impossible to recreate if the service were ever
+# deleted. This is the same failure the registry had (see BUILD-LOG #2): a thing that matters,
+# recorded somewhere nothing checks.
+#
+# Render reads this on deploy for services created from a Blueprint. An existing dashboard-
+# created service keeps using its dashboard settings, so this also serves as the written record
+# of what those settings are.
+services:
+  - type: web
+    name: ladder-llm
+    runtime: python
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    # --server.headless: Streamlit otherwise tries to open a browser and prompts for an email on
+    #   first run, which has no meaning on a server.
+    # --server.address 0.0.0.0: bind all interfaces, not just loopback.
+    # $PORT: Render assigns the port; hardcoding 8501 works only because Render falls back to
+    #   scanning for an open port, which costs ~5 minutes of "Detected service running on port"
+    #   probing on every deploy.
+    startCommand: >-
+      PYTHONPATH=. streamlit run src/app.py
+      --server.port $PORT
+      --server.address 0.0.0.0
+      --server.headless true
+    envVars:
+      # Values are set in the Render dashboard, never committed. sync:false stops Blueprint
+      # deploys from clearing them.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false

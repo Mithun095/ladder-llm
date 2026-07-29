@@ -1,6 +1,15 @@
-streamlit
-groq
-openai
-pydantic>=2
-python-dotenv
-requests
+# Pinned to the versions this project was built and measured against.
+#
+# These were unpinned until a deploy review. Render reinstalls from this file on every build, so
+# an upstream release could change behaviour on a deploy containing none of my own changes — and
+# for a project whose point is reproducible measurements, floating dependencies mean the
+# benchmark numbers can't be reproduced later.
+#
+# Compatible-release (~=) rather than == so security patches still land: ~=1.60.0 accepts
+# 1.60.x but not 1.61.0.
+streamlit~=1.60.0
+groq~=1.6.0
+openai~=2.49.0
+pydantic~=2.13
+python-dotenv~=1.2
+requests~=2.34

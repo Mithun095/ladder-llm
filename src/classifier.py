@@ -4,7 +4,26 @@ from pydantic import BaseModel
 
 from src.llm_client import ModelUnavailable, call_groq, call_json
 
-CLASSIFIER_MODEL = "llama-3.1-8b-instant"
+# Was llama-3.1-8b-instant, chosen because the classifier is a cheap pre-step and the 8B model is
+# the cheapest thing on Groq. That reasoning ignored what a classifier error actually costs: the
+# *type* selects an entire model ladder, so misreading a QA question as a coding one routes it to
+# a different provider — and when that provider's daily quota is gone, the query fails outright
+# with nothing to show. It is the most consequential single call in the system.
+#
+# Measured both against the benchmark's own type labels (25 queries x 2 repeats). This is ground
+# truth, not judge verdicts, so unlike most numbers in this project it isn't circular:
+#
+#                          type accuracy   type stable   difficulty stable
+#   llama-3.1-8b-instant       94% (47/50)     24/25          15/25
+#   openai/gpt-oss-120b       100% (50/50)     25/25          22/25
+#
+# The difficulty column is the one that showed up in use: the same query classified easy, medium,
+# hard and expert across repeated runs, changing both its entry tier and its ceiling each time.
+#
+# Costs ~1.8x more per call ($0.037 vs $0.021 per 1k) and adds ~250ms median latency (711ms vs
+# 461ms), against a multi-second end-to-end time. Worth it to stop routing queries into a ladder
+# that can't answer them. See BUILD-LOG.md #23.
+CLASSIFIER_MODEL = "openai/gpt-oss-120b"
 
 SYSTEM_PROMPT = """You are a query classifier. Given a user query, respond with ONLY this JSON \
 shape, no other text:

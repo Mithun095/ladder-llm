@@ -973,6 +973,62 @@ both cheaper and larger, so skipping it is strictly worse
    capability proxy, and the invariant here can't be written without both.
 
 
+## 23. The cheapest model in the system was making the most expensive mistake
+
+**Symptom** — a screenshot of the deployed app. Query: *"What is the 47th digit after the decimal
+point of pi?"*, routed as **`coding` / `hard`**. Coding runs on OpenRouter at every tier, the free
+daily cap was exhausted, so every tier returned `unavailable` and the query failed with nothing to
+show. A question about a number was sent to a ladder of code-specialised models.
+
+**First instinct was wrong** — I assumed the classifier reliably mislabels that query and went to
+fix the prompt. It doesn't. Twelve runs of the same query never once returned `coding`:
+
+```
+WITH quotes  {'reasoning/medium': 2, 'qa/hard': 3, 'qa/medium': 1}
+no quotes    {'reasoning/expert': 2, 'qa/easy': 1, 'reasoning/medium': 3}
+```
+
+The `coding` label was a rare draw. But look at what *is* consistent: nothing. The same query came
+back easy, medium, hard **and** expert. Difficulty sets both the entry tier and the ceiling, so
+that query was being routed differently on essentially every submission.
+
+**Root cause** — the classifier ran on `llama-3.1-8b-instant`, picked because it's the cheapest
+model on Groq and classification is "just a cheap pre-step". That reasoning priced the *call* and
+ignored the *consequence*. Classification is the only decision in the system that can send a
+query to an entirely different provider — and when that provider is out of quota, a
+classification error isn't a slightly worse answer, it's no answer at all.
+
+**Measurement** — the benchmark set is grouped five-per-type, so the intended type is ground
+truth. 25 queries x 2 repeats, both candidates:
+
+| classifier | type accuracy | type stable across repeats | difficulty stable |
+|---|---|---|---|
+| `llama-3.1-8b-instant` | 94% (47/50) | 24/25 | **15/25** |
+| `openai/gpt-oss-120b` | **100%** (50/50) | **25/25** | **22/25** |
+
+The 8B model's confusions were `qa->reasoning` twice and `reasoning->qa` once — including
+*"How does a hash map achieve O(1) lookup?"*, which it called reasoning on both attempts.
+
+**This is one of the few numbers in the project that isn't circular.** It's scored against the
+benchmark's own type labels, not against the judge. Compare #18, where every judge-scored metric
+moved together and none of them could distinguish "better router" from "easier grading."
+
+**Cost of the fix** — ~1.8x per classifier call ($0.037 vs $0.021 per 1k) and ~250ms median added
+latency (711ms vs 461ms) against a multi-second end-to-end time. Bought with the same sparse-MoE
+economics as #20: `gpt-oss-120b` is 117B total but ~5.1B active, so "use the much bigger model
+for the most consequential decision" costs cents.
+
+**Takeaways:**
+
+1. **Price the consequence of a call, not the call.** The classifier was optimised as the
+   cheapest step in the pipeline while being the step whose errors cost the most. Cost per token
+   and cost per mistake are different quantities and I had only been tracking one.
+2. **A rare wrong answer and a wildly unstable right answer are the same bug.** Chasing the
+   `coding` outlier would have missed that difficulty was unstable on 10 of 25 queries.
+3. **Reproduce before fixing.** Twelve runs cost about a minute and disproved the hypothesis I was
+   about to write code against.
+
+
 ---
 
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a
