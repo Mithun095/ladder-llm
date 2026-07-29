@@ -97,6 +97,9 @@ CANDIDATES = [
 REPEATS = 2
 PACE_S = 2.2  # Groq allows 30 requests/minute; stay just under it
 EXEC_TIMEOUT_S = 15
+# Calls each candidate should get. Used to flag a model measured on fewer, whose rate is
+# therefore over a smaller denominator than its competitors'.
+TOTAL_CALLS = REPEATS * len(TASKS)
 
 SUFFIX = (" Return ONLY the function definition. No example usage, no markdown fences, "
           "no explanation.")
@@ -166,11 +169,29 @@ def score(provider: str, model_id: str) -> dict:
 def main():
     results = {}
     for provider, model_id, size in CANDIDATES:
-        r = score(provider, model_id)
+        try:
+            r = score(provider, model_id)
+        except Exception as e:
+            # score() only catches ModelUnavailable (429/503). Anything else — a 404 from a
+            # delisted model, which this project has already been bitten by once — would
+            # propagate out of main(), skip the json.dump at the end, and discard every
+            # candidate already scored, after their quota had been spent. One bad model must
+            # not cost the whole sweep.
+            print(f"  {provider:<11} {model_id:<30} ERROR {type(e).__name__}: {e}", flush=True)
+            r = {"attempted": 0, "parseable": 0, "unparseable": 0, "code_ok": 0,
+                 "unavailable": 0, "failures": [f"{type(e).__name__}: {e}"], "passed": 0,
+                 "error": f"{type(e).__name__}: {e}"}
+            results[model_id] = {**r, "provider": provider, "total_params_b": size}
+            continue
         r["provider"], r["total_params_b"] = provider, size
         results[model_id] = r
-        state = (f"{r['passed']}/{r['attempted']}" if r["attempted"]
-                 else f"unavailable ({r['unavailable']} calls refused)")
+        # Shows both numbers, like the summary table. Printing code_ok/attempted here would
+        # collapse "wrote wrong code" into "never returned parseable JSON" — the exact conflation
+        # this module's docstring exists to warn about, reintroduced on the progress line.
+        state = (f"json {r['parseable']}/{r['attempted']}, code {r['code_ok']}/{r['parseable']}"
+                 if r["parseable"] else
+                 f"unavailable ({r['unavailable']} refused)" if not r["attempted"] else
+                 f"json 0/{r['attempted']} — never returned parseable JSON")
         print(f"  {provider:<11} {model_id:<30} {state}", flush=True)
 
     print("\n" + "=" * 82)
@@ -186,8 +207,12 @@ def main():
         json_pct = r["parseable"] / r["attempted"] * 100
         code = (f"{r['code_ok']}/{r['parseable']} = {r['code_ok']/r['parseable']*100:5.1f}%"
                 if r["parseable"] else "not measurable")
+        # A model refused on most of its calls scores over whatever few got through, so a 2/2
+        # can outrank a 9/12 measured on everything. Flag anything measured on less than the
+        # full set — an unmarked rate implies a denominator it doesn't have.
+        partial = f"  [PARTIAL: {r['unavailable']} of {TOTAL_CALLS} calls refused]" if r["unavailable"] else ""
         print(f"{model_id:<32}{r['parseable']}/{r['attempted']} = {json_pct:5.1f}%  "
-              f"{code:<16}{r['total_params_b']}B")
+              f"{code:<16}{r['total_params_b']}B{partial}")
         for f in r["failures"][:2]:
             print(f"      {f}")
     print("\n'JSON ok' is whether the model returned the envelope ANSWER_SYSTEM_PROMPT requires.")
@@ -195,11 +220,23 @@ def main():
     print("and its code column is unmeasured rather than bad.")
 
     skipped = [m for m, r in results.items() if not r["attempted"]]
+    partials = [(m, r) for m, r in results.items() if r["attempted"] and r["unavailable"]]
+    errored = [(m, r) for m, r in results.items() if r.get("error")]
     if skipped:
         print(f"\n{len(skipped)} model(s) unreachable this run — NOT scored as failures. "
               f"Re-run once the provider quota resets for a complete comparison:")
         for m in skipped:
             print(f"  - {m}")
+    if partials:
+        print(f"\n{len(partials)} model(s) only PARTIALLY measured — their rates are over fewer "
+              f"calls than everyone else's, so do not rank them against fully-measured models:")
+        for m, r in partials:
+            print(f"  - {m}: {r['attempted']} of {TOTAL_CALLS} calls got through")
+    if errored:
+        print(f"\n{len(errored)} model(s) raised a non-quota error (a delisted model ID does "
+              f"this). Their results are absent, not zero:")
+        for m, r in errored:
+            print(f"  - {m}: {r['error']}")
 
     with open("eval/coding_model_comparison.json", "w") as f:
         json.dump(results, f, indent=2)

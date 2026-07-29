@@ -101,17 +101,19 @@ def main():
     n_correct = n_wrong = 0
     for label, code in CORRECT + WRONG:
         runs = executes_correctly(code)
-        # Counted here, from the same execution the verdict is compared against. Computing it in
-        # a second pass afterwards would re-run every case, so a denominator could disagree with
-        # its own numerator.
-        n_correct += runs
-        n_wrong += not runs
         time.sleep(PACE_S)
         verdict = judge(QUERY, code, "coding")
         if verdict is None:
             unavailable += 1
             print(f"{label:<48}{'yes' if runs else 'no':<8}{'n/a':<8}judge unavailable")
             continue
+        # Denominators are incremented AFTER the ungraded case is skipped, so they count only
+        # cases that actually got a verdict. Counting them before the `continue` let a
+        # rate-limited case swell the denominator while being unable to contribute to the
+        # numerator — biasing both printed rates downwards, i.e. flattering the judge. Same
+        # shape as the bug this whole file exists to catch.
+        n_correct += runs
+        n_wrong += not runs
         graded += 1
         passed = verdict.verdict == "pass"
         if runs and not passed:
@@ -134,8 +136,12 @@ def main():
         print(f"\n{unavailable} case(s) were not judged (rate limit) — the rates above are over "
               f"{graded} graded cases, not all {len(CORRECT) + len(WRONG)}.")
     if graded < len(CORRECT) + len(WRONG):
-        print("Incomplete run: not asserting on a partial measurement.")
-        return
+        # Exit non-zero. Not asserting on partial data is right; exiting 0 while doing so makes
+        # "every case was rate-limited" indistinguishable from "everything passed" to any caller
+        # that checks the status code — including eval/run_after_quota_reset.sh, which logs $?.
+        print("Incomplete run: not asserting on a partial measurement. "
+              "Re-run when the judge model is not rate-limited.")
+        sys.exit(2)
 
     # Asymmetric thresholds, as in check_judge_accuracy.py: a false pass hands the user broken
     # code and stops the cascade, a false fail only wastes an escalation.

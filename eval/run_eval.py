@@ -152,7 +152,10 @@ def main():
     print(f"Avg compute saved (active params): {summary['avg_compute_saved_pct']:.1f}% "
           f"(over the {cascade_pass} queries the judge accepted; {answered_count} produced text at all)")
     print(f"Avg cost saved ($/token rates):    {summary['avg_cost_saved_pct']:.1f}%")
-    print(f"Illustrative $ saved:           ${summary['total_dollar_saved_illustrative']:.4f} across {n} queries")
+    # `cascade_pass`, not `n`: this total accumulates only under `if cascade_ok`, so labelling it
+    # "across 25 queries" attributes savings to three runs that contributed nothing to it.
+    print(f"Illustrative $ saved:           ${summary['total_dollar_saved_illustrative']:.4f} "
+          f"across the {cascade_pass} accepted queries")
     print(f"Confidence ECE:                 {summary['confidence_calibration_ece']:.3f} "
           f"(0=perfectly calibrated, higher=more overconfident)")
     if skipped:
