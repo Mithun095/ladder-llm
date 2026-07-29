@@ -55,15 +55,24 @@ cd "$REPO" || exit 1
   echo "=== run_eval exit: $? ==="
 } >"$OUT" 2>&1
 
-# Remove this job so it runs exactly once. Absolute path because cron's PATH is minimal — if
-# `crontab` isn't found here the entry survives and this benchmark quietly burns the daily
-# OpenRouter quota every morning forever, which is a much worse failure than not running at all.
-if [ -x /usr/bin/crontab ]; then
+# Disarm whichever scheduler launched this, so it runs exactly once. A plain cron entry
+# survived here once already because a missed 05:45 (machine asleep) just gets skipped to the
+# next day forever — the systemd timer path below is what replaced it (Persistent=true catches
+# up a missed run on wake instead of silently dropping it), but this still cleans up a crontab
+# entry too in case one is ever used again standalone.
+if [ -x /usr/bin/systemctl ] && /usr/bin/systemctl --user is-enabled ladder-llm-postreset.timer >/dev/null 2>&1; then
+  if /usr/bin/systemctl --user disable --now ladder-llm-postreset.timer 2>>"$OUT"; then
+    echo "disabled the systemd timer; this was a one-shot" >>"$OUT"
+  else
+    echo "ERROR: could not disable ladder-llm-postreset.timer — it will fire again and spend" >>"$OUT"
+    echo "       the daily OpenRouter quota. Remove it by hand:" >>"$OUT"
+    echo "  systemctl --user disable --now ladder-llm-postreset.timer" >>"$OUT"
+  fi
+fi
+if [ -x /usr/bin/crontab ] && /usr/bin/crontab -l 2>/dev/null | grep -q 'run_after_quota_reset'; then
   # `|| true` on the grep: when this is the ONLY crontab entry, grep -v matches nothing and exits
   # 1, and with `set -o pipefail` that made the whole pipeline report failure even though the
-  # (now empty) crontab installed fine. The success message never printed, and because stderr is
-  # discarded a genuine failure printed nothing either — so the good and bad outcomes looked
-  # identical, and the bad one is the case that leaves this burning the quota every morning.
+  # (now empty) crontab installed fine.
   if /usr/bin/crontab -l 2>/dev/null | { grep -v 'run_after_quota_reset' || true; } \
        | /usr/bin/crontab - 2>>"$OUT"; then
     echo "removed the cron entry; this was a one-shot" >>"$OUT"
@@ -72,9 +81,6 @@ if [ -x /usr/bin/crontab ]; then
     echo "       daily OpenRouter quota. Remove it by hand:" >>"$OUT"
     echo "  crontab -l | grep -v run_after_quota_reset | crontab -" >>"$OUT"
   fi
-else
-  echo "WARNING: /usr/bin/crontab not found — remove the entry by hand:" >>"$OUT"
-  echo "  crontab -l | grep -v run_after_quota_reset | crontab -" >>"$OUT"
 fi
 
 echo "results in $OUT"
