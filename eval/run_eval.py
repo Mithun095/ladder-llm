@@ -51,6 +51,11 @@ def main():
             unverified += result.accepted and not result.verified
 
             for step in result.trace:
+                # `accepted_unverified` is EXCLUDED on purpose, not by oversight. Calibration
+                # pairs a stated confidence with whether the answer was actually right; for an
+                # answer the judge never saw, that second term is unknown. Including it would
+                # mean guessing the outcome, and guessing "correct" would make the model look
+                # better calibrated the more often the judge was rate-limited.
                 if step.confidence is not None and step.status in ("accepted", "judged_fail"):
                     confidence_verdict_pairs.append((step.confidence, step.status == "accepted"))
 

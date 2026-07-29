@@ -17,6 +17,12 @@ cd "$REPO" || exit 1
 
 {
   echo "=== run started $(date -u '+%Y-%m-%d %H:%M UTC') ==="
+  # Stamp the commit. Routing and scoring both change often here, so a benchmark number is only
+  # interpretable if you know which code produced it — otherwise this log becomes the same
+  # unattributed-numbers problem the README results table had to be labelled for.
+  echo "commit:  $(cd "$REPO" && /usr/bin/git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  echo "branch:  $(cd "$REPO" && /usr/bin/git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  echo "dirty:   $(cd "$REPO" && [ -n "$(/usr/bin/git status --porcelain 2>/dev/null)" ] && echo yes || echo no)"
   echo
   # Full benchmark FIRST. Both jobs draw on the same account-wide daily quota, and the eval is
   # the one whose numbers the README quotes — if only one can finish, it should be this one.
