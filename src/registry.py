@@ -8,7 +8,9 @@ MAX_TIER = 4
 class ModelConfig:
     provider: str  # "groq" | "openrouter"
     model_id: str
-    active_params_b: float  # active params per token, not total (matters for MoE models)
+    active_params_b: float  # active params per token — what a token actually costs to compute
+    total_params_b: float   # all weights — a rough proxy for how much the model *knows*
+
     # Published $/1M tokens for the *paid* listing of the same open-weight model, taken from
     # OpenRouter's catalog (see checks/check_model_ids.py). Every model actually called here is
     # a free endpoint, so this is a provider-neutral market proxy for what the compute is worth
@@ -45,36 +47,36 @@ class ModelConfig:
 # compute; price is a proxy for what the market charges for it, and they are not the same
 # ordering. The ladder is ordered by price, and metrics.py reports both.
 REGISTRY: dict[tuple[int, str], ModelConfig] = {
-    (1, "qa"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 0.050, 0.080),
-    (1, "coding"): ModelConfig("openrouter", "cohere/north-mini-code:free", 7),
-    (1, "reasoning"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 0.050, 0.080),
-    (1, "summarization"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 0.050, 0.080),
-    (1, "translation"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 0.050, 0.080),
+    (1, "qa"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
+    (1, "coding"): ModelConfig("openrouter", "cohere/north-mini-code:free", 7, 7),
+    (1, "reasoning"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
+    (1, "summarization"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
+    (1, "translation"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
 
     # Tier 2 is the sparse-MoE slot: large total parameter count, small active footprint, and
     # the cheapest published rate in the ladder. This is where most escalations now land.
-    (2, "qa"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 0.037, 0.170),
-    (2, "coding"): ModelConfig("openrouter", "poolside/laguna-xs-2.1:free", 7),
-    (2, "reasoning"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 0.037, 0.170),
-    (2, "summarization"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 0.037, 0.170),
-    (2, "translation"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 0.037, 0.170),
+    (2, "qa"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
+    (2, "coding"): ModelConfig("openrouter", "poolside/laguna-xs-2.1:free", 7, 7),
+    (2, "reasoning"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
+    (2, "summarization"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
+    (2, "translation"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
 
     # Tier 3 is the dense-model slot: fewer total params than tier 2 but every one of them active
     # on every token, which is why it costs several times more per token despite being "smaller".
-    (3, "qa"): ModelConfig("groq", "qwen/qwen3.6-27b", 27, 0.300, 2.000),
+    (3, "qa"): ModelConfig("groq", "qwen/qwen3.6-27b", 27, 27, 0.300, 2.000),
     # Was poolside/laguna-m.1:free — delisted from OpenRouter's catalog mid-project and started
     # returning 404 "No endpoints found". Caught by checks/check_model_ids.py, which is why
     # that check validates the registry instead of just printing the catalog.
-    (3, "coding"): ModelConfig("openrouter", "poolside/laguna-s-2.1:free", 14),
-    (3, "reasoning"): ModelConfig("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", 12, 0.085, 0.400),
-    (3, "summarization"): ModelConfig("groq", "qwen/qwen3.6-27b", 27, 0.300, 2.000),
-    (3, "translation"): ModelConfig("openrouter", "google/gemma-4-26b-a4b-it:free", 4, 0.070, 0.340),
+    (3, "coding"): ModelConfig("openrouter", "poolside/laguna-s-2.1:free", 14, 14),
+    (3, "reasoning"): ModelConfig("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", 12, 120, 0.085, 0.400),
+    (3, "summarization"): ModelConfig("groq", "qwen/qwen3.6-27b", 27, 27, 0.300, 2.000),
+    (3, "translation"): ModelConfig("openrouter", "google/gemma-4-26b-a4b-it:free", 4, 26, 0.070, 0.340),
 
-    (4, "qa"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 0.500, 2.200),
-    (4, "coding"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 0.500, 2.200),
-    (4, "reasoning"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 0.500, 2.200),
-    (4, "summarization"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 0.500, 2.200),
-    (4, "translation"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 0.500, 2.200),
+    (4, "qa"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 550, 0.500, 2.200),
+    (4, "coding"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 550, 0.500, 2.200),
+    (4, "reasoning"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 550, 0.500, 2.200),
+    (4, "summarization"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 550, 0.500, 2.200),
+    (4, "translation"): ModelConfig("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", 55, 550, 0.500, 2.200),
 }
 
 

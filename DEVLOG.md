@@ -85,12 +85,20 @@ transferable to translation. Difficulty decides *how far up the ladder to start*
 them into a single "quality" axis would mean either wasting compute on easy queries that
 happen to be a hard *type*, or under-serving genuinely hard queries of an easy type.
 
-**Why `active_params_b` and not `params_b`.** This is the field the whole savings metric is
+**Why `active_params_b` and not `params_b`** — and why, eventually, both. This is the field the whole savings metric is
 built on, and it's the one place a naive number would have quietly inflated every result. Some
 models here are Mixture-of-Experts: `openai/gpt-oss-120b` has ~117B total parameters but a
 router activates only ~5.1B of them per token. Compute cost tracks *active* params, not total.
 Recording 120 instead of 5.1 would have made the savings number look spectacular and be wrong
 (`BUILD-LOG.md` #3).
+
+That conclusion was right about cost and then quietly overreached into "total params don't
+matter." They do — just for a different question. `total_params_b` is now recorded alongside,
+because the invariant that catches a bad *entry* tier can't be written without it: skipping a
+tier is only defensible when the skipped model is smaller, and "smaller" is a statement about
+total parameters, not active ones. Active params say what a token costs; total params say
+roughly what the model knows. Collapsing the two is what let expert queries skip a 117B model to
+open on a 27B one (`BUILD-LOG.md` #22).
 
 **Active params are not monotonic with tier number, and for a long time I treated that as an
 interesting quirk instead of the bug it was pointing at.** The original write-up here said tier

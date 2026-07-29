@@ -894,6 +894,85 @@ delta smaller than the noise floor.
    investigation was worth more than the hypothesis.
 
 
+## 22. The tier swap left a second dict pointing at the old ladder
+
+**Symptom** — none visible. Every check passed, the benchmark was fine, and the app worked. This
+one was found by reading the code after fixing #20 and asking what *else* assumed the old tier
+order.
+
+**What was wrong** — `STARTING_TIER` decides where a query *enters* the ladder:
+
+```python
+STARTING_TIER = {"easy": 1, "medium": 1, "hard": 2, "expert": 3}
+```
+
+Expert queries started at tier 3. That was correct when tier 3 held the largest model. After the
+#20 swap it meant every expert query skipped tier 2 — the sparse 120B model — to open on tier 3,
+the dense 27B one. The skipped tier was **cheaper and larger**:
+
+| task type | old entry (tier 3) | new entry (tier 2) | |
+|---|---|---|---|
+| qa | qwen3.6-27b — 27B total, $0.430/1k | gpt-oss-120b — 117B total, $0.038/1k | **11.4× cheaper** |
+| summarization | qwen3.6-27b — 27B total, $0.430/1k | gpt-oss-120b — 117B total, $0.038/1k | **11.4× cheaper** |
+| reasoning | nemotron-super — 120B total, $0.089/1k | gpt-oss-120b — 117B total, $0.038/1k | 2.3× cheaper |
+| translation | gemma-4-26b — 26B total, $0.075/1k | gpt-oss-120b — 117B total, $0.038/1k | 2.0× cheaper |
+
+Paid on **every** expert query, needed or not, to get a smaller model.
+
+**Why the existing check didn't catch it** — `check_registry.py` asserts the ladder is monotonic
+in price. It is. The bug wasn't in the ordering, it was in *where the ladder gets entered*, and
+nothing looked at that. A passing check on the adjacent property is worse than no check, because
+it reads as coverage.
+
+**The check I wrote first was also useless, and I only found out because I tested it.** My first
+attempt asserted the entry tier is the cheapest tier within its own band. Expert's band is
+[3, 4], and tier 3 *is* cheaper than tier 4 — so it passed with the bug still present:
+
+```
+$ python -m checks.check_registry     # with the buggy expert=3 restored
+registry check passed.                # ...it didn't catch anything
+```
+
+The bug is about tiers skipped *before* the band, which my assertion never looked at.
+
+**Finding the invariant that actually discriminates** — "never skip a cheaper tier" is wrong: the
+price ladder is monotonic, so every skipped tier is cheaper, and that rule would forbid starting
+above tier 1 at all. Starting high is a deliberate bet that a cheap model is too weak to be worth
+calling.
+
+What makes expert=3 different from hard=2 is that the skipped tier wins on **both** axes:
+
+- `hard` starts at tier 2, skipping tier 1 (8B total, cheaper). Cheaper but *smaller* — a real
+  tradeoff, and a legitimate bet.
+- `expert` started at tier 3, skipping tier 2 (117B total, cheaper). Cheaper **and bigger** —
+  no tradeoff at all, just strictly worse.
+
+So the rule is: **never skip a tier that dominates your entry tier on both cost and size.** That
+required adding `total_params_b` to the registry, which the project had deliberately avoided
+tracking (#3) because *active* params are what drive cost. Both are needed: active params for
+what a token costs, total params for what the model knows. They are answers to different
+questions and I had been treating one as a substitute for the other.
+
+```
+$ python -m checks.check_registry     # with the buggy expert=3 restored
+AssertionError: expert/qa: starts at tier 3 (qwen/qwen3.6-27b, 27B total, $0.00043/query)
+but skips tier 2 (openai/gpt-oss-120b, 117B total, $0.00004/query) — the skipped tier is
+both cheaper and larger, so skipping it is strictly worse
+```
+
+**Takeaways:**
+
+1. **A config change has a blast radius, and it is every other constant that encoded the same
+   assumption.** #20 changed what a tier number *means*; `STARTING_TIER` still spoke the old
+   language. Grep for what else reads the thing you just redefined.
+2. **Test that your check fails on the bug it was written for.** Mine didn't, and it printed
+   "passed" while the bug sat two lines away. This is the same lesson as #2, where a
+   catalog-printing script that never asserted let a delisted model ID through for months.
+3. **Two metrics I'd treated as one.** #3 concluded "track active params, not total" and that was
+   right for cost. It quietly became "total params don't matter," which is wrong — they're the
+   capability proxy, and the invariant here can't be written without both.
+
+
 ---
 
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a

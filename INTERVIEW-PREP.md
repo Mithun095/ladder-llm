@@ -402,7 +402,9 @@ projects never do.
 - 5 task types × 4 tiers = 20 registered model configurations, all validated against both
   providers' live catalogs by `checks/check_model_ids.py` (which caught one delisted model ID
   mid-project).
-- Escalation ceilings: easy/medium → tier 2, hard → tier 3, expert → tier 4.
+- Entry tiers: easy/medium → tier 1, hard/expert → tier 2. Ceilings: easy/medium → tier 2,
+  hard → tier 3, expert → tier 4. Difficulty controls how far a query may *climb*, not just
+  where it starts.
 - The judge fires on **every** answer — a change made after measuring confidence at 9-10
   regardless of correctness.
 - ECE moved 0.52 → 0.23 → 0.13 across bug fixes, then back to 0.28 on the latest sweep. Don't

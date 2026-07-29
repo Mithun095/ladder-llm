@@ -57,7 +57,13 @@ flowchart TD
 |---|---|---|
 | easy / medium | tier 1 | tier 2 |
 | hard | tier 2 | tier 3 |
-| expert | tier 3 | tier 4 |
+| expert | tier 2 | tier 4 |
+
+Hard and expert both *enter* at tier 2; what difficulty controls is how far they may **climb**.
+Expert used to enter at tier 3, which was right when tier 3 held the biggest model — after the
+tier 2/3 swap it meant expert queries skipped a 117B model to open on a 27B one costing 11×
+more. `checks/check_registry.py` now fails if any difficulty starts at a tier that a skipped
+tier beats on **both** price and size ([`BUILD-LOG.md` #22](BUILD-LOG.md)).
 
 **Three failure modes, kept distinct.** Conflating these produces wrong answers *and* wrong
 metrics — a provider outage must never be read as a bad answer:

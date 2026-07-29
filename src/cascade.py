@@ -21,18 +21,20 @@ other text:
 # supplied text. For these types the raw query is sent through untouched.
 PRESERVE_QUERY_TYPES = {"summarization", "translation"}
 
-STARTING_TIER = {"easy": 1, "medium": 1, "hard": 2, "expert": 3}
-
-# ponytail: STARTING_TIER predates the tier 2/3 swap in registry.py and hasn't been re-derived
-# since. It was written when tier 3 was the "large, strong" slot, so starting expert queries
-# there made sense. After the swap tier 3 is the *dense, expensive* slot and tier 2 holds the
-# sparse 120B model — so an expert query now skips the cheapest-and-strongest tier on the ladder
-# and opens at the one costing ~12x more per output token. check_registry.py doesn't catch this:
-# it asserts the ladder's ordering, not where the ladder is entered.
-# Deliberately not changed: no expert-difficulty query appeared in the last sweep (everything
-# resolved at tier 1 or 2), so there is nothing to measure the change against, and the benchmark
-# can't resolve it anyway (see the noise note on CEILING_TIER below). Revisit with a benchmark
-# that actually contains expert queries.
+# Where a query enters the ladder. Starting above tier 1 is a bet that the lower tiers are too
+# weak to be worth a call — it is NOT a cost decision, because the price ladder is monotonic, so
+# every skipped tier is strictly cheaper than the one you land on.
+#
+# `expert` used to start at tier 3, which was correct when tier 3 held the largest model. After
+# the tier 2/3 swap in registry.py that stopped being true: tier 3 is now the *dense, expensive*
+# slot and tier 2 holds the sparse 120B model. So expert queries were skipping the strongest
+# cheap model on the ladder to open at one costing ~11x more per query, and paying that on every
+# expert query whether or not it needed it. The "too weak to bother with" argument does not
+# apply to a 120B MoE.
+#
+# Expert now enters at tier 2 alongside hard. The two are still distinct: they differ in how far
+# they may climb (CEILING_TIER 4 vs 3), which is the part difficulty should actually control.
+STARTING_TIER = {"easy": 1, "medium": 1, "hard": 2, "expert": 2}
 
 # The ceiling bounds worst-case spend: it's what stops a query the judge keeps rejecting from
 # climbing to the 550B model and burning the entire saving. The catch is that it's set from the
