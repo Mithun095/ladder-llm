@@ -12,7 +12,7 @@ so it's readable as a debugging casebook rather than a diary:
 For what got built and why, see [`DEVLOG.md`](DEVLOG.md). For the interview framing of these
 same stories, see [`INTERVIEW-PREP.md`](INTERVIEW-PREP.md).
 
-**The one theme worth noticing before you read on:** of the 25 issues below, only about a third
+**The one theme worth noticing before you read on:** of the 26 issues below, only about a third
 were bugs in code. The rest were bugs in a *prompt*, in a *metric*, in a *test*, in a *comment*,
 or in my own assumption about what the failure meant. In an LLM system the code is often the
 least likely thing to be broken, and that changes where you look first.
@@ -737,6 +737,8 @@ at no cost to the wasteful one.
    number that looked good, wasn't checked because it looked good, and was measuring something
    other than what its name said.
 
+---
+
 ## 19. The same bug, a third time: "36% compute saved" on an answer that was rejected
 
 **Symptom** — a screenshot from the deployed app. Query: *"What is the 47th digit after the
@@ -773,6 +775,11 @@ class CascadeResult:
 
 Both callers now route through it, and `checks/check_metrics_formatter.py` asserts that a trace
 ending in `judged_fail` is not accepted.
+
+> **This predicate was later split in two** — see [#24](#24-a-whole-task-type-with-no-fallback-and-a-benchmark-that-measured-the-wrong-thing).
+> One property couldn't serve both callers once an answer the judge never *saw* became a distinct
+> status: `accepted` (show it to a user) now includes those, `verified` (count it as a benchmark
+> pass) does not.
 
 **The number moved in the direction I didn't expect.** I assumed excluding failures would push
 average savings down, because I thought of them as bad results. The opposite happened — savings
@@ -898,6 +905,7 @@ delta smaller than the noise floor.
 4. This is the second time the fix was *not* the change I set out to make (see #19 → #20). The
    investigation was worth more than the hypothesis.
 
+---
 
 ## 22. The tier swap left a second dict pointing at the old ladder
 
@@ -977,6 +985,7 @@ both cheaper and larger, so skipping it is strictly worse
    right for cost. It quietly became "total params don't matter," which is wrong — they're the
    capability proxy, and the invariant here can't be written without both.
 
+---
 
 ## 23. The cheapest model in the system was making the most expensive mistake
 
@@ -1033,6 +1042,7 @@ for the most consequential decision" costs cents.
 3. **Reproduce before fixing.** Twelve runs cost about a minute and disproved the hypothesis I was
    about to write code against.
 
+---
 
 ## 24. A whole task type with no fallback, and a benchmark that measured the wrong thing
 
@@ -1129,6 +1139,7 @@ is the exact mistake #21 exists to record, and I nearly made it again two entrie
    errors, so hitting the limit made the score look *better*. A measurement that improves when it
    collects less data is broken.
 
+---
 
 ## 25. "This metric doesn't depend on the judge" — the per-query value didn't, the average did
 
@@ -1174,6 +1185,58 @@ isn't in the answer — you also have to ask who chose the rows.
 3. Documentation drifts fastest right after the code is most correct. Every one of these was
    written *while* fixing something real, which is exactly when it feels safe not to re-read.
 
+---
+
+## 26. The last step in the trace isn't always the one that mattered
+
+**Symptom** — found by an adversarial QA pass, not live use. Two constructed traces exposed it:
+`[tier 2: judged_fail, tier 3: unavailable]` and the same shape with a `malformed_response`
+swapped in for the second step. Neither is exotic — it's the ordinary shape of a hard query
+whose escalation target happens to be rate-limited.
+
+**Root cause.** Two places in the code read `trace[-1]` as if it summarized the whole run, when
+a trace can end on a step that produced nothing after an earlier step that did:
+
+- `src/app.py`'s error branch checked `trace[-1].status == "judged_fail"` to decide whether to
+  show the judge's rejection reason. When the *judged_fail* step isn't last — because the next
+  tier was then tried and came back `unavailable` — that check is false, the judge's reason is
+  dropped, and the UI instead prints "every model was either unavailable or returned output that
+  couldn't be parsed," which is false: a model *was* reached, and it rejected the answer.
+- `src/cascade.py` set `tier_used = trace[-1].tier`. `last_answer` (the text actually shown) is
+  set separately, at whichever tier last produced a parseable response — not necessarily the
+  same tier as the final trace entry. A run ending `[tier 2: judged_fail, tier 3: unavailable]`
+  displays tier 2's answer under the header "resolved at tier 3."
+
+Both bugs are the same mistake once stated together: treating "the last thing that happened" as
+"the thing that explains the outcome." They're different from the recurring existence-vs-verdict
+confusion above — this one is about *position in a sequence*, not about *presence of a string*.
+
+**Fix.** `app.py` now searches the whole trace backward for the last `judged_fail` step to source
+the reason, while still reporting the true final tier for "reached its ceiling." `cascade.py`
+tracks `answer_tier` alongside `last_answer`, updated at the same place, and reports that as
+`tier_used` instead of the final trace entry's tier.
+
+**Two more from the same pass, smaller:**
+
+- `checks/check_cascade.py` asserted the final trace status was one of four values, written
+  before `accepted_unverified` existed (#24 added it as a fifth trace outcome). The check didn't
+  fail on the common path, only on the specific run where the judge was rate-limited on the
+  answer that would otherwise have passed — silent survivorship in the one file whose job is to
+  catch this class of drift.
+- `src/llm_client.py`'s `call_json` re-raises any provider status code outside {429, 503} on
+  purpose, so a real registry bug (bad model ID → 400) crashes loudly instead of silently
+  returning nothing. But other 4xx codes are reachable in normal use, not just from a broken
+  registry — a large summarization or translation paste (those two types send the raw query
+  untouched, see `PRESERVE_QUERY_TYPES`) can draw a 413, and that took the whole Streamlit page
+  down with an unhandled exception. `app.py` now wraps the `run_cascade` call so any exception
+  surfaces as an error message instead of a crash; the loud-crash behavior in `call_json` itself
+  is untouched, since `checks/check_model_ids.py` already exists to catch registry bugs before
+  they reach a user.
+
+**Takeaway:** a multi-step trace has no guaranteed relationship between "the last step" and "the
+step that produced what's on screen." Anything that reads `trace[-1]` to explain an outcome
+should be read back and asked: what happens if the run continues past the interesting step
+without producing anything new?
 
 ---
 

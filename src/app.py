@@ -22,9 +22,18 @@ query = st.text_input("Ask a question", placeholder="e.g. A farmer has 17 sheep.
 submit = st.button("Submit", type="primary")
 
 if submit and query:
-    with st.spinner("Routing through the cascade..."):
-        result = run_cascade(query)
-    st.session_state["result"] = result
+    try:
+        with st.spinner("Routing through the cascade..."):
+            result = run_cascade(query)
+        st.session_state["result"] = result
+    except Exception as e:
+        # call_json re-raises any provider status code it doesn't recognize as retryable
+        # (429/503) so a real registry bug (bad model ID) crashes loudly instead of silently
+        # returning nothing. But other 4xx codes are reachable too — e.g. 413 on an oversized
+        # summarization/translation paste, since those types send the raw query untouched — and
+        # those aren't registry bugs, just an operational error the user should see, not an
+        # unhandled exception that takes down the whole page.
+        st.error(f"**The cascade failed to complete.** {type(e).__name__}: {e}")
 
 if "result" in st.session_state:
     result = st.session_state["result"]
@@ -50,13 +59,23 @@ if "result" in st.session_state:
         )
 
     if not result.accepted:
-        last = result.trace[-1] if result.trace else None
-        if last is not None and last.status == "judged_fail":
+        # Find the last judge rejection anywhere in the trace, not just at the final step: a
+        # judged_fail tier can be followed by an unavailable one (the next tier's provider is
+        # rate-limited) if nothing escalates further, and the final step's status used to be
+        # the only one checked — dropping the judge's reason and reporting "no model was
+        # reachable", which is false when a model *was* reached and rejected.
+        last_rejection = next(
+            (s for s in reversed(result.trace) if s.status == "judged_fail"), None
+        )
+        if last_rejection is not None:
+            # "reached its ceiling" uses the trace's actual last tier, not last_rejection.tier —
+            # those differ exactly when a later tier was attempted and came back unavailable.
             st.error(
                 f"**No tier produced an answer the judge accepted** — the cascade reached its "
-                f"ceiling (tier {last.tier}) and stopped. The answer below is the best attempt, "
-                f"shown so you can see what was rejected, but it did **not** pass review.\n\n"
-                f"Judge's reason: *{last.judge_reason}*"
+                f"ceiling (tier {result.trace[-1].tier}) and stopped. The answer below is the "
+                f"best attempt, shown so you can see what was rejected, but it did **not** pass "
+                f"review.\n\nJudge's reason (tier {last_rejection.tier}): "
+                f"*{last_rejection.judge_reason}*"
             )
         elif result.trace and all(s.status == "unavailable" for s in result.trace):
             # Almost always the free-tier daily cap rather than a real outage. Saying so beats

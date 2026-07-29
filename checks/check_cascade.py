@@ -10,6 +10,8 @@ for step in result.trace:
 
 assert result.answer and result.answer != "No model produced a usable answer."
 assert len(result.trace) >= 1
-assert result.trace[-1].status in ("accepted", "judged_fail", "unavailable", "malformed_response")
+assert result.trace[-1].status in (
+    "accepted", "accepted_unverified", "judged_fail", "unavailable", "malformed_response",
+)
 
 print("cascade check passed.")

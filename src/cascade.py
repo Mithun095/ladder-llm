@@ -146,6 +146,7 @@ def run_cascade(query: str, use_cache: bool = True) -> CascadeResult:
     tier = STARTING_TIER[classification.difficulty]
     ceiling = CEILING_TIER[classification.difficulty]
     last_answer = None
+    answer_tier = None
 
     while tier <= ceiling:
         model_config = get_model(tier, classification.type)
@@ -168,6 +169,7 @@ def run_cascade(query: str, use_cache: bool = True) -> CascadeResult:
             continue
 
         last_answer = result.answer
+        answer_tier = tier
 
         if not JUDGE_ALWAYS:
             if result.confidence >= 8:
@@ -197,7 +199,11 @@ def run_cascade(query: str, use_cache: bool = True) -> CascadeResult:
             break
         tier += 1
 
-    final_tier = trace[-1].tier if trace else tier
+    # Not just `trace[-1].tier`: the last trace entry can be a tier that produced nothing (e.g.
+    # unavailable after an earlier tier's answer got judge-rejected), in which case the displayed
+    # answer — `last_answer` — actually came from an earlier tier. `tier_used` must name the tier
+    # that produced the answer being shown, not the tier the cascade happened to stop on.
+    final_tier = answer_tier if answer_tier is not None else (trace[-1].tier if trace else tier)
     result = CascadeResult(
         answer=last_answer or "No model produced a usable answer.",
         trace=trace,
