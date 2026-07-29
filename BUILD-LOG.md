@@ -732,6 +732,168 @@ at no cost to the wasteful one.
    number that looked good, wasn't checked because it looked good, and was measuring something
    other than what its name said.
 
+## 19. The same bug, a third time: "36% compute saved" on an answer that was rejected
+
+**Symptom** — a screenshot from the deployed app. Query: *"What is the 47th digit after the
+decimal point of pi?"* Both tiers returned an explanation of the Bailey–Borwein–Plouffe formula
+instead of a digit. The judge correctly rejected both. The banner said **"No tier produced an
+answer the judge accepted."** Directly beneath it, the cost panel said **"36% compute saved."**
+
+**Root cause** — the gate on the savings metric asked the wrong question:
+
+```python
+produced_answer = result.answer != "No model produced a usable answer."
+```
+
+That asks *"is there a string?"*, not *"did this work?"*. A judge-rejected answer is still a
+string, so it sailed through the gate. The run burned 35B active params and delivered nothing,
+and the UI congratulated it for spending less than the maximum.
+
+**Why it survived two previous fixes** — this is the same defect as #11, which I fixed in the
+eval harness, and #16, which I fixed in the metric itself. Each time I patched the caller in
+front of me. The predicate was never defined in one place, so `src/app.py` and
+`eval/run_eval.py` had each independently rolled their own copy of it, and each copy was
+wrong in the same way.
+
+**Fix** — define it once, on the object every caller already holds:
+
+```python
+@dataclass
+class CascadeResult:
+    ...
+    @property
+    def accepted(self) -> bool:
+        return bool(self.trace) and self.trace[-1].status == "accepted"
+```
+
+Both callers now route through it, and `checks/check_metrics_formatter.py` asserts that a trace
+ending in `judged_fail` is not accepted.
+
+**The number moved in the direction I didn't expect.** I assumed excluding failures would push
+average savings down, because I thought of them as bad results. The opposite happened — savings
+went *up*, because failed runs are the ones that escalate through the most tiers and therefore
+carry the *highest* cost. Counting them was dragging the average down with the price of
+failure. The old number wasn't flattering the router; it was quietly mixing two different
+populations.
+
+**Takeaways:**
+
+1. **A bug fixed at three call sites was never fixed — it was reproduced.** The signal I
+   ignored twice: I was writing the same predicate in more than one file. That's the moment to
+   move it, not the third time it bites.
+2. **"Is there output?" and "did it succeed?" are different questions**, and conflating them is
+   easy precisely because the happy path makes them agree.
+3. Predict which way a metric should move before you re-measure. Being wrong about the
+   direction is how you find out you misunderstood what it was averaging over.
+
+---
+
+## 20. The cascade was escalating *down* the price curve
+
+**Prompted by a question I couldn't answer** — "why aren't you using the bigger free models,
+like the 120B ones?" I assumed the answer was "I already am, at tier 3." Then I actually
+checked what the tiers cost, and found the ladder was inverted.
+
+**What I found** — I had been ranking tiers by *active parameters*, on the reasonable-sounding
+theory that active params proxy compute and compute proxies cost. Published per-token rates for
+the same open-weight models say otherwise:
+
+| tier | model | active params | $/1M in | $/1M out |
+|---|---|---|---|---|
+| 1 | `llama-3.1-8b-instant` | 8B | 0.050 | 0.080 |
+| 2 | `qwen/qwen3.6-27b` | 27B | **0.300** | **2.000** |
+| 3 | `openai/gpt-oss-120b` | 5.1B | **0.037** | **0.170** |
+| 4 | `nemotron-3-ultra-550b-a55b` | 55B | 0.500 | 2.200 |
+
+**Tier 3 was roughly 12x cheaper per output token than the tier 2 it escalated up from** — and
+it's the larger, generally stronger model. `gpt-oss-120b` is a sparse MoE: ~117B total
+parameters, ~5.1B active per token. A 27B *dense* model activates every one of its parameters on
+every token; the 120B model activates 4% of its.
+
+**Why this mattered more than it looks** — it compounded with `CEILING_TIER`, which stops easy
+and medium queries at tier 2. The two settings together meant the cascade was **structurally
+incapable of reaching a model that was simultaneously better and cheaper.** That is the actual
+reason the pi query in #19 failed: not that the ceiling was too low, but that the wrong model
+was sitting under it.
+
+**Fix** — swap tiers 2 and 3 for the four task types where the inversion existed, so the ladder
+is monotonic in real price. Then assert it, in `checks/check_registry.py`:
+
+```python
+assert costs[tier] >= costs[tier - 1], (
+    f"{task_type}: tier {tier+1} is cheaper than tier {tier} "
+    f"— escalation must not move down the price curve")
+```
+
+I also replaced the invented `$0.02 per active-billion-params` constant in `metrics.py` with the
+actual published rates, because that constant is what had hidden the inversion: it *derived*
+price from active params, so by construction it could never disagree with them.
+
+**The two metrics genuinely disagree, and both are kept.** Active params say tier 1 (8B) costs
+more than tier 2 (5.1B); price says the opposite. Neither is wrong — they measure different
+things, and a sparse model is exactly where they come apart. The ladder is ordered by price, the
+UI shows both, and `check_registry.py` deliberately asserts monotonicity only on price.
+
+**A side effect worth having:** the swap moved tier 2 for four task types from OpenRouter onto
+Groq. OpenRouter's free tier is capped at 50 requests/day account-wide and was the single most
+common cause of the app failing outright; Groq's limit is per-minute and clears on its own.
+Cheaper, stronger, and less exposed to the quota that actually breaks things.
+
+**Takeaways:**
+
+1. **"Bigger model" and "more expensive model" stopped being synonyms when MoE arrived.** The
+   cheapest model in this ladder by published rate has the most parameters.
+2. **A derived metric can't contradict what it's derived from.** My cost estimate was a function
+   of active params, so it could never have caught an error in using active params as cost. It
+   took an external source of prices to see it.
+3. The design invariant — *escalating costs more* — was assumed everywhere and asserted nowhere,
+   for the whole life of the project.
+
+---
+
+## 21. Two identical benchmark runs scored 72% and 84%
+
+**How this surfaced** — before changing `CEILING_TIER` I wanted evidence, so I ran the
+benchmark twice: once with the shipped ceiling, once with it lifted to tier 4. The lifted run
+scored 100% against the shipped run's 72%, and seven queries "improved".
+
+**Why I didn't believe it** — several of the "rescued" queries had been accepted at a *lower*
+tier in the lifted run than the tier the shipped run stopped at. A higher ceiling cannot cause a
+query to succeed at tier 1. Those weren't rescues; they were the judge returning a different
+verdict on an identical query.
+
+**What I measured instead** — I re-ran the *same* configuration twice:
+
+```
+sweep A, replicate 1:  18/25 = 72%
+sweep A, replicate 2:  21/25 = 84%
+```
+
+Same code, same queries, same ceiling. **A 12-point spread, with 5 of 25 queries flipping
+verdict.** The classifier is non-deterministic too, so a query's difficulty label — and
+therefore which ceiling even applies to it — changes between runs.
+
+**Consequence** — my benchmark cannot resolve any change smaller than about 12 points, and every
+single-run before/after comparison in this project's history is weaker evidence than I treated
+it as. At n=25 with a stochastic judge and a stochastic classifier, one sweep is an anecdote.
+
+**What I did about the ceiling** — nothing, and that's the finding. The experiment couldn't
+justify raising it, and once #20 put the right model underneath it, raising it stopped being
+attractive anyway: the ceiling now stops at the strongest cheap model in the ladder rather than
+below it. Lifting it would have cost `8 + 5.1 + 27 = 40.1B` per escalation to buy a pass-rate
+delta smaller than the noise floor.
+
+**Takeaways:**
+
+1. **Measure your noise floor before you measure your effect.** I nearly shipped a ceiling
+   change and a "72% → 100%" claim on top of a 12-point measurement error.
+2. **A result that's too good is data about your instrument**, not about your system.
+3. The honest headline for a benchmark like this is a range from repeated runs, not a point
+   estimate quoted to one decimal place.
+4. This is the second time the fix was *not* the change I set out to make (see #19 → #20). The
+   investigation was worth more than the hypothesis.
+
+
 ---
 
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a

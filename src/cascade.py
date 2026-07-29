@@ -22,6 +22,24 @@ other text:
 PRESERVE_QUERY_TYPES = {"summarization", "translation"}
 
 STARTING_TIER = {"easy": 1, "medium": 1, "hard": 2, "expert": 3}
+
+# The ceiling bounds worst-case spend: it's what stops a query the judge keeps rejecting from
+# climbing to the 550B model and burning the entire saving. The catch is that it's set from the
+# classifier's difficulty guess, made before any answer exists, and no amount of contrary
+# evidence lifts it — so an easy/medium query that fails twice stops at tier 2 with tiers 3 and 4
+# unused. That looked like the bug behind "no tier produced an answer" reports, and the obvious
+# fix was to raise it.
+#
+# It wasn't, and raising it would have been the expensive wrong fix. The real problem was that
+# tier 2 held a 27B dense model costing 12x more per output token than the 120B sparse model
+# sitting unreachable at tier 3 (see registry.py). Reordering those two means the ceiling now
+# stops at the strongest cheap model in the ladder instead of below it — a better answer for
+# less money, without touching this dict. Kept as-is deliberately.
+#
+# ponytail: static ceiling from a pre-answer guess. Upgrade path if the tail ever matters:
+# re-classify difficulty using the judge's rejection reasons and lift the ceiling on evidence.
+# Not done, because on this benchmark the effect is smaller than the run-to-run noise floor
+# (two identical sweeps scored 72% and 84%), so it cannot currently be measured. See BUILD-LOG #21.
 CEILING_TIER = {"easy": 2, "medium": 2, "hard": 3, "expert": 4}
 
 # Live testing showed self-reported confidence landing at 9-10 on every call regardless of
@@ -65,6 +83,17 @@ class CascadeResult:
     optimized_prompt: str = ""
     elapsed_ms: int = 0
     cached: bool = False
+
+    @property
+    def accepted(self) -> bool:
+        """Did this run actually deliver something the judge signed off on?
+
+        Lives here because every caller needs it and two of them previously each rolled their
+        own version — the UI and the eval harness both tested `answer != "<sentinel>"`, which
+        asks "is there a string?" not "did this work". A judge-rejected answer is still a
+        string, so both reported compute savings on runs that delivered nothing usable.
+        """
+        return bool(self.trace) and self.trace[-1].status == "accepted"
 
 
 def _cache_key(query: str) -> str:

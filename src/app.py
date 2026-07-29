@@ -4,8 +4,10 @@ from src.cascade import run_cascade
 from src.formatter import format_answer
 from src.metrics import (
     compute_saved_pct,
+    dollar_saved_pct,
     estimate_dollar_saved,
     total_active_params_burned,
+    trace_cost_usd,
 )
 from src.registry import MAX_TIER, get_model
 
@@ -36,8 +38,7 @@ if "result" in st.session_state:
     # The cascade returns the best answer it found even when no tier was ever accepted. Showing
     # that silently is how a judge-rejected answer ends up looking like a verified one — say
     # plainly that every tier failed, and why the last one did.
-    accepted = bool(result.trace) and result.trace[-1].status == "accepted"
-    if not accepted:
+    if not result.accepted:
         last = result.trace[-1] if result.trace else None
         if last is not None and last.status == "judged_fail":
             st.error(
@@ -76,7 +77,7 @@ if "result" in st.session_state:
     answer_col, trace_col = st.columns([3, 2])
 
     with answer_col:
-        st.subheader("Answer" if accepted else "Best attempt (rejected)")
+        st.subheader("Answer" if result.accepted else "Best attempt (rejected)")
         st.markdown(format_answer(result.answer, result.type))
 
     with trace_col:
@@ -101,29 +102,45 @@ if "result" in st.session_state:
     st.divider()
     st.subheader("Cost of this answer")
 
-    # A run where every tier was unavailable burns zero compute and would score "100% saved".
-    # True, and completely meaningless — nothing was delivered. Savings are only a number when
-    # something came out; otherwise this metric flatters a total failure. (Same bug as the one
-    # fixed in the eval harness — see BUILD-LOG.md #11.)
-    produced_answer = result.answer != "No model produced a usable answer."
+    # "Saved" only means anything if the run delivered a usable answer. Two ways it can fail to:
+    # every tier unavailable (0 params burned → a flattering "100% saved" for doing nothing), or
+    # every tier judge-rejected (params burned, nothing delivered → "36% saved" on a total
+    # failure). Both are gated on result.accepted. See BUILD-LOG.md #11 and #19.
     cost_cols = st.columns(4)
-    if produced_answer:
+    if result.accepted:
         cost_cols[0].metric(
             "Compute saved vs. max tier",
             f"{saved:.0f}%",
             delta=None if saved >= 0 else "cascade cost more than the baseline",
             delta_color="inverse",
+            help=f"Active params burned: {burned:.1f}B vs. an always-tier-{MAX_TIER} baseline "
+                 f"of {baseline}B. Measures compute, not price.",
+        )
+        cost_saved = dollar_saved_pct(result.trace, result.type)
+        cost_cols[1].metric(
+            "Cost saved vs. max tier",
+            f"{cost_saved:.0f}%",
+            delta=None if cost_saved >= 0 else "cascade cost more than the baseline",
+            delta_color="inverse",
+            help="Priced at published $/1M-token rates for the same open-weight models. This is "
+                 "a separate number from compute saved, and the two can disagree — a sparse MoE "
+                 "can burn fewer active params than a smaller dense model yet cost more per "
+                 "token. See registry.py.",
         )
         cost_cols[2].metric(
-            "Illustrative $ saved",
+            "$ saved on this query",
             f"${estimate_dollar_saved(result.trace, result.type):.5f}",
-            help="Approximate rate, not a real bill — these are free-tier models. See metrics.py.",
+            help=f"This run priced at ${trace_cost_usd(result.trace, result.type):.5f}. Published "
+                 f"rates, not a real bill — every model called here is a free endpoint.",
         )
     else:
-        cost_cols[0].metric("Compute saved vs. max tier", "n/a",
-                            help="No answer was produced, so there is nothing to have saved on.")
-        cost_cols[2].metric("Illustrative $ saved", "n/a")
-    cost_cols[1].metric("Active params burned", f"{burned:.1f}B", help=f"Always-tier-{MAX_TIER} baseline: {baseline}B")
+        for col, label in ((0, "Compute saved vs. max tier"), (1, "Cost saved vs. max tier"),
+                           (2, "$ saved on this query")):
+            cost_cols[col].metric(
+                label, "n/a",
+                help=f"No accepted answer came out of this run, so there is nothing to have "
+                     f"saved on — the {burned:.1f}B active params it burned bought nothing.",
+            )
     cost_cols[3].metric("End-to-end latency", "0.0s (cached)" if result.cached else f"{result.elapsed_ms / 1000:.1f}s")
 
     if result.optimized_prompt:
