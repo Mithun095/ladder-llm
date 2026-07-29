@@ -12,10 +12,15 @@ so it's readable as a debugging casebook rather than a diary:
 For what got built and why, see [`DEVLOG.md`](DEVLOG.md). For the interview framing of these
 same stories, see [`INTERVIEW-PREP.md`](INTERVIEW-PREP.md).
 
-**The one theme worth noticing before you read on:** of the 14 issues below, only about half
-were bugs in code. The rest were bugs in a *prompt*, in a *metric*, in a *test*, or in my own
-assumption about what the failure meant. In an LLM system the code is often the least likely
-thing to be broken, and that changes where you look first.
+**The one theme worth noticing before you read on:** of the 25 issues below, only about a third
+were bugs in code. The rest were bugs in a *prompt*, in a *metric*, in a *test*, in a *comment*,
+or in my own assumption about what the failure meant. In an LLM system the code is often the
+least likely thing to be broken, and that changes where you look first.
+
+The single most repeated mistake here is worth naming up front, because it recurs in #11, #16,
+#19, #24 and #25: **confusing "some output exists" with "this worked", and losing track of which
+population a number is averaged over.** Five separate appearances, each caught only by asking
+what exactly the denominator was.
 
 ---
 
