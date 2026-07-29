@@ -23,6 +23,17 @@ PRESERVE_QUERY_TYPES = {"summarization", "translation"}
 
 STARTING_TIER = {"easy": 1, "medium": 1, "hard": 2, "expert": 3}
 
+# ponytail: STARTING_TIER predates the tier 2/3 swap in registry.py and hasn't been re-derived
+# since. It was written when tier 3 was the "large, strong" slot, so starting expert queries
+# there made sense. After the swap tier 3 is the *dense, expensive* slot and tier 2 holds the
+# sparse 120B model — so an expert query now skips the cheapest-and-strongest tier on the ladder
+# and opens at the one costing ~12x more per output token. check_registry.py doesn't catch this:
+# it asserts the ladder's ordering, not where the ladder is entered.
+# Deliberately not changed: no expert-difficulty query appeared in the last sweep (everything
+# resolved at tier 1 or 2), so there is nothing to measure the change against, and the benchmark
+# can't resolve it anyway (see the noise note on CEILING_TIER below). Revisit with a benchmark
+# that actually contains expert queries.
+
 # The ceiling bounds worst-case spend: it's what stops a query the judge keeps rejecting from
 # climbing to the 550B model and burning the entire saving. The catch is that it's set from the
 # classifier's difficulty guess, made before any answer exists, and no amount of contrary

@@ -246,6 +246,18 @@ a two-sided sign test on 6 discordant pairs gives *p* ≈ 0.22, so it does not c
 at n=16. The honest claim is that the cascade was *not worse* than always using the largest
 model, while using a fraction of the compute; "better" needs a bigger benchmark than this one.
 
+Reproduce it from `eval/results.json`:
+
+```python
+ran = [r for r in results["per_query"] if r["baseline_ran"]]
+sum(r["cascade_passed"] for r in ran), sum(r["baseline_passed"] for r in ran), len(ran)
+# -> (14, 10, 16)
+```
+
+`baseline_ran` is recorded per query because `baseline_passed: false` on its own conflates *"the
+tier-4 model ran and got it wrong"* with *"the tier-4 model was never reachable"* — and scoring
+a provider outage as a baseline failure would hand the cascade a win it didn't earn.
+
 ### Every number above is scored by the judge — so the judge is measured separately
 
 This is the most important caveat in the project, and it's why there's a second harness.

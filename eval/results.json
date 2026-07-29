@@ -32,7 +32,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": true
     },
     {
       "query": "What year did World War II end?",
@@ -43,7 +44,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": true
     },
     {
       "query": "Explain the difference between TCP and UDP.",
@@ -54,7 +56,8 @@
       "baseline_passed": false,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": true
     },
     {
       "query": "What is the capital of Australia?",
@@ -65,7 +68,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": true
     },
     {
       "query": "How does a hash map achieve O(1) lookup?",
@@ -76,7 +80,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 76.2,
-      "cost_saved_pct": 88.0
+      "cost_saved_pct": 88.0,
+      "baseline_ran": true
     },
     {
       "query": "Write a function to reverse a linked list in O(1) space",
@@ -87,7 +92,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": null,
-      "cost_saved_pct": null
+      "cost_saved_pct": null,
+      "baseline_ran": true
     },
     {
       "query": "Write a Python function that checks if a string is a palindrome",
@@ -98,7 +104,8 @@
       "baseline_passed": false,
       "answered": true,
       "compute_saved_pct": 87.3,
-      "cost_saved_pct": 91.4
+      "cost_saved_pct": 91.4,
+      "baseline_ran": true
     },
     {
       "query": "Implement binary search in Python",
@@ -109,7 +116,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 87.3,
-      "cost_saved_pct": 91.4
+      "cost_saved_pct": 91.4,
+      "baseline_ran": true
     },
     {
       "query": "Write a function to find the longest common subsequence of two strings",
@@ -120,7 +128,8 @@
       "baseline_passed": false,
       "answered": true,
       "compute_saved_pct": 87.3,
-      "cost_saved_pct": 91.4
+      "cost_saved_pct": 91.4,
+      "baseline_ran": true
     },
     {
       "query": "Write a function that merges two sorted lists into one sorted list",
@@ -131,7 +140,8 @@
       "baseline_passed": false,
       "answered": true,
       "compute_saved_pct": null,
-      "cost_saved_pct": null
+      "cost_saved_pct": null,
+      "baseline_ran": true
     },
     {
       "query": "Prove that the square root of 2 is irrational",
@@ -142,7 +152,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 90.7,
-      "cost_saved_pct": 92.3
+      "cost_saved_pct": 92.3,
+      "baseline_ran": true
     },
     {
       "query": "If all bloops are razzies and all razzies are lazzies, are all bloops lazzies?",
@@ -153,7 +164,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 76.2,
-      "cost_saved_pct": 88.0
+      "cost_saved_pct": 88.0,
+      "baseline_ran": true
     },
     {
       "query": "A train leaves station A at 60mph, another leaves station B at 40mph, 200 miles apart, heading toward each other. When do they meet?",
@@ -164,7 +176,8 @@
       "baseline_passed": false,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": true
     },
     {
       "query": "Is the statement 'this sentence is false' true or false?",
@@ -175,7 +188,8 @@
       "baseline_passed": false,
       "answered": true,
       "compute_saved_pct": 90.7,
-      "cost_saved_pct": 92.3
+      "cost_saved_pct": 92.3,
+      "baseline_ran": true
     },
     {
       "query": "What is 17 * 23?",
@@ -186,7 +200,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 76.2,
-      "cost_saved_pct": 88.0
+      "cost_saved_pct": 88.0,
+      "baseline_ran": true
     },
     {
       "query": "Summarize: The quick brown fox jumps over the lazy dog repeatedly, day after day, until eventually the dog decides to move to a different yard entirely.",
@@ -197,7 +212,8 @@
       "baseline_passed": true,
       "answered": true,
       "compute_saved_pct": 76.2,
-      "cost_saved_pct": 88.0
+      "cost_saved_pct": 88.0,
+      "baseline_ran": true
     },
     {
       "query": "Summarize in one sentence: Photosynthesis is the process by which green plants use sunlight to synthesize foods from carbon dioxide and water, generating oxygen as a byproduct.",
@@ -205,10 +221,11 @@
       "difficulty": "easy",
       "tier_used": 2,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 76.2,
-      "cost_saved_pct": 88.0
+      "cost_saved_pct": 88.0,
+      "baseline_ran": false
     },
     {
       "query": "Summarize: The stock market saw significant volatility this week as investors reacted to new inflation data, with tech stocks leading the decline before a late recovery on Friday.",
@@ -216,10 +233,11 @@
       "difficulty": "easy",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": false
     },
     {
       "query": "Give a 2 sentence summary: The history of Rome spans over a thousand years, from its founding as a small city-state to its rise as one of the largest empires in ancient history, before its eventual decline.",
@@ -227,10 +245,11 @@
       "difficulty": "medium",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": false
     },
     {
       "query": "Summarize: Regular exercise has been shown to improve cardiovascular health, boost mental well-being, aid in weight management, and increase overall longevity.",
@@ -238,10 +257,11 @@
       "difficulty": "medium",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": false
     },
     {
       "query": "Translate 'good morning' to French",
@@ -249,10 +269,11 @@
       "difficulty": "easy",
       "tier_used": 2,
       "cascade_passed": false,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": null,
-      "cost_saved_pct": null
+      "cost_saved_pct": null,
+      "baseline_ran": false
     },
     {
       "query": "Translate 'Where is the nearest train station?' to Spanish",
@@ -260,10 +281,11 @@
       "difficulty": "easy",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": false
     },
     {
       "query": "Translate 'Thank you very much' to German",
@@ -271,10 +293,11 @@
       "difficulty": "easy",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": false
     },
     {
       "query": "Translate 'I would like a cup of coffee, please' to Italian",
@@ -282,10 +305,11 @@
       "difficulty": "easy",
       "tier_used": 1,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 85.5,
-      "cost_saved_pct": 95.7
+      "cost_saved_pct": 95.7,
+      "baseline_ran": false
     },
     {
       "query": "Translate 'Good night, sleep well' to Japanese",
@@ -293,10 +317,11 @@
       "difficulty": "easy",
       "tier_used": 2,
       "cascade_passed": true,
-      "baseline_passed": false,
+      "baseline_passed": null,
       "answered": true,
       "compute_saved_pct": 76.2,
-      "cost_saved_pct": 88.0
+      "cost_saved_pct": 88.0,
+      "baseline_ran": false
     }
   ],
   "skipped": []
