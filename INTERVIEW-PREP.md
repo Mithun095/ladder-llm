@@ -405,11 +405,19 @@ projects never do.
 - Escalation ceilings: easy/medium → tier 2, hard → tier 3, expert → tier 4.
 - The judge fires on **every** answer — a change made after measuring confidence at 9-10
   regardless of correctness.
-- ECE improved 0.52 → 0.23 → 0.13 across bug fixes; top confidence bucket claims 0.95,
-  delivers 0.82.
-- **76.6%** average active-parameter compute saved versus an always-tier-4 baseline.
-- **72%** pass rate overall, **90%** (18/20) excluding queries where no model was reachable;
-  13 of 20 answered queries resolved at tier 1.
+- ECE moved 0.52 → 0.23 → 0.13 across bug fixes, then back to 0.28 on the latest sweep. Don't
+  present that as a regression — ECE is computed from judge verdicts, so it inherits the same
+  ~12-point noise as the pass rate. It shows self-reported confidence is badly calibrated,
+  which is the point; the exact value is not stable enough to track.
+- **92.7%** average cost saved versus an always-tier-4 baseline, at published $/token rates;
+  **83.7%** on active parameters. Neither depends on judge verdicts — these are the numbers to
+  lead with.
+- **22 of 25** queries answered acceptably without going past tier 2; **14 resolved at tier 1**,
+  and nothing needed tiers 3 or 4.
+- Pass rate **88%** on the most recent sweep — but quote it as a range, not a point: two
+  identical sweeps scored 72% and 84%, so anything under ~12 points is noise.
+- Head to head on the 16 queries where the tier-4 model was reachable: cascade **14/16**,
+  always-tier-4 baseline **10/16**. Directionally good, *not* significant (sign test p ≈ 0.22).
 - Free-tier ceilings: OpenRouter 50 requests/day account-wide (1000/day with a $10 credit);
   Groq 30 requests/minute.
 - 12 self-checks, 5 of which run in CI without needing API keys (the rest need live API access).

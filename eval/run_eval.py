@@ -78,7 +78,12 @@ def main():
                 "difficulty": result.difficulty,
                 "tier_used": result.tier_used,
                 "cascade_passed": cascade_ok,
-                "baseline_passed": baseline_ok,
+                # Recorded separately because `baseline_passed: false` on its own conflates "the
+                # tier-4 model ran and got it wrong" with "the tier-4 model was never reachable",
+                # which makes a paired cascade-vs-baseline comparison impossible to reconstruct
+                # from the JSON afterwards. Same conflation as BUILD-LOG #19, one layer out.
+                "baseline_ran": baseline is not None,
+                "baseline_passed": baseline_ok if baseline is not None else None,
                 "answered": answered,
                 "compute_saved_pct": round(saved_pct, 1) if cascade_ok else None,
                 "cost_saved_pct": round(cost_saved_pct, 1) if cascade_ok else None,

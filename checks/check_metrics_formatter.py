@@ -1,6 +1,7 @@
 from src.cascade import CascadeResult, TraceStep
 from src.formatter import format_answer
-from src.metrics import compute_saved_pct, total_active_params_burned
+from src.metrics import compute_saved_pct, total_active_params_burned, trace_cost_usd
+from src.registry import MAX_TIER, TASK_TYPES
 
 trace = [
     TraceStep(tier=1, model_id="llama-3.1-8b-instant", status="escalated", confidence=3, active_params_b=8),
@@ -43,6 +44,17 @@ assert CascadeResult(
     answer="9",
     trace=[TraceStep(tier=1, model_id="t1", status="accepted", confidence=9, active_params_b=8)],
 ).accepted, "a trace ending in accepted must count as accepted"
+
+# trace_cost_usd re-resolves each step's tier against the registry, so a tier/type pair the
+# registry doesn't hold would raise KeyError inside the Streamlit render path — after the answer
+# is already on screen. Every tier the cascade can emit, for every type it can classify as.
+for _type in TASK_TYPES:
+    for _tier in range(1, MAX_TIER + 1):
+        step = TraceStep(tier=_tier, model_id="m", status="judged_fail", active_params_b=1)
+        assert trace_cost_usd([step], _type) > 0, f"no cost for tier={_tier} type={_type}"
+    # An unavailable tier never ran, so it must contribute nothing to the bill.
+    assert trace_cost_usd([TraceStep(tier=1, model_id="m", status="unavailable")], _type) == 0
+    assert trace_cost_usd([], _type) == 0
 
 assert format_answer("def f(): pass", "coding").startswith("```")
 assert format_answer("hello", "coding") == "```\nhello\n```" or "```" in format_answer("hello", "coding")

@@ -86,8 +86,8 @@ Mixture-of-Experts models like `gpt-oss-120b` (~117B total, ~5.1B active).
 | Tier | QA | Coding | Reasoning | Summarization | Translation |
 |---|---|---|---|---|---|
 | **1 — Nano** | Groq `llama-3.1-8b-instant` (8B) | OR `cohere/north-mini-code:free` (~7B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) | Groq `llama-3.1-8b-instant` (8B) |
-| **2 — Sparse** | Groq `gpt-oss-120b` (5.1B active) | OR `poolside/laguna-xs-2.1:free` (~7B) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
-| **3 — Dense** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
+| **2 — Small** | Groq `gpt-oss-120b` (5.1B active) | OR `poolside/laguna-xs-2.1:free` (~7B) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) | Groq `gpt-oss-120b` (5.1B active) |
+| **3 — Large** | Groq `qwen/qwen3.6-27b` (27B) | OR `poolside/laguna-s-2.1:free` (~14B) | OR `nemotron-3-super-120b-a12b:free` (12B active) | Groq `qwen/qwen3.6-27b` (27B) | OR `google/gemma-4-26b-a4b-it:free` (4B active) |
 | **4 — Max** | OR `nemotron-3-ultra-550b-a55b:free` (55B active) | same | same | same | same |
 
 *(OR = OpenRouter, all `:free`)*
@@ -191,25 +191,60 @@ as if it were verified.
 From `eval/run_eval.py` — 25 queries across all five task types, each run through the full
 cascade **and** through an always-tier-4 baseline (raw query, no classification, no escalation).
 
-| Metric | Value |
-|---|---|
-| Avg. active-parameter compute saved vs. always-tier-4 | **76.6%** |
-| Cascade pass rate | **72%** overall — **90%** (18/20) excluding queries no model was reachable for |
-| Confidence calibration (ECE) | **0.131** — 0 is perfect calibration |
-| Where queries resolved | **13 at tier 1**, 6 at tier 2, 1 at tier 3 |
+| Metric | Value | Noise-sensitive? |
+|---|---|---|
+| Avg. **cost** saved vs. always-tier-4 (published $/token rates) | **92.7%** | no |
+| Avg. **compute** saved vs. always-tier-4 (active params) | **83.7%** | no |
+| Where queries resolved | **14 at tier 1**, 8 at tier 2, 0 above | barely |
+| Cascade pass rate | **88%** (22/25) — but see below | **yes** |
+| Confidence calibration (ECE) | 0.279 — 0 is perfect calibration | **yes** |
 
-That last row is the result in miniature: two thirds of the benchmark was answered acceptably by
-the cheapest model on the ladder.
+The two savings figures are the ones to trust: they depend only on which tiers ran, not on the
+judge's opinion of anything. The bottom two are judge-scored and noisy — read the next section
+before quoting them.
+
+**22 of 25 queries were answered acceptably without ever going past tier 2**, and none needed
+tiers 3 or 4 at all.
 
 Per task type, from the same run:
 
-| Type | Pass | Note |
-|---|---|---|
-| QA | **6/6** | |
-| Reasoning | **4/4** | |
-| Summarization | **5/5** | was **0/5** before the prompt-payload fix — [`BUILD-LOG.md` #13](BUILD-LOG.md) |
-| Translation | 3/5 | tier-2 translation model is OpenRouter and was unreachable |
-| Coding | 0/5 | **no model ran at all** — coding is OpenRouter at tiers 1-3 and the free daily quota was exhausted |
+| Type | Pass |
+|---|---|
+| QA | **5/5** |
+| Reasoning | **5/5** |
+| Summarization | **5/5** (was **0/5** before the prompt-payload fix — [`BUILD-LOG.md` #13](BUILD-LOG.md)) |
+| Translation | 4/5 |
+| Coding | 3/5 |
+
+*(Per-type totals shift between runs because the classifier assigns the type, and it isn't
+deterministic — a query counted under QA in one sweep can land under reasoning in the next.)*
+
+### The pass rate is noise. The savings are not.
+
+Two **identical** sweeps — same code, same queries, same config — scored **72% and 84%**. Five
+of 25 queries flipped verdict, and the classifier relabelled some queries' difficulty in
+between. So this benchmark cannot resolve any difference smaller than about 12 points, and the
+88% above is one draw from a wide distribution, not an improvement over the 72% this README used
+to quote. I found this by running an A/B test that returned a suspiciously perfect result and
+re-running the *control* instead of believing it ([`BUILD-LOG.md` #21](BUILD-LOG.md)).
+
+The savings figures don't have this problem. They're computed from which tiers ran and published
+per-token rates — no verdicts involved.
+
+### Versus the always-max-tier baseline
+
+On the 16 queries where the tier-4 model was reachable, compared head to head on the same
+queries:
+
+| | Pass |
+|---|---|
+| Cascade | **14/16** (87.5%) |
+| Always-tier-4 baseline | 10/16 (62.5%) |
+
+The cascade won 5 of the 6 queries where the two disagreed. **That is suggestive, not proven** —
+a two-sided sign test on 6 discordant pairs gives *p* ≈ 0.22, so it does not clear significance
+at n=16. The honest claim is that the cascade was *not worse* than always using the largest
+model, while using a fraction of the compute; "better" needs a bigger benchmark than this one.
 
 ### Every number above is scored by the judge — so the judge is measured separately
 
@@ -236,10 +271,11 @@ justification afterwards. The fix was to make it commit to its own answer *befor
 to render a verdict ([`BUILD-LOG.md` #18](BUILD-LOG.md)); that halved the harmful error rate at
 no cost to the wasteful one.
 
-**What this means for the headline numbers:** treat 72% as "72% of answers this judge approved,"
-with a judge known to wrongly approve about 29% of wrong answers. The compute-savings figure is
-unaffected — it's counted from active parameters, not from verdicts — but the *quality* figures
-carry that uncertainty and should not be quoted without it.
+**What this means for the headline numbers:** treat the pass rate as "the share of answers this
+judge approved," with a judge known to wrongly approve about 29% of wrong answers — and with a
+run-to-run spread of about 12 points on top of that. Two independent sources of error stack on
+the same number. The savings figures are unaffected: they're counted from which tiers ran and
+what those models cost, not from verdicts.
 
 **Read `eval/results.json` with the caveats it records.** Queries where every tier was
 rate-limited are excluded from the savings average — they burn zero compute and would otherwise
