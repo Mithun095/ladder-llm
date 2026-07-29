@@ -50,6 +50,23 @@ TYPE_GUIDANCE = {
     "details is the point of summarizing, not a flaw.",
     "translation": "\n\nThis is a translation task: judge whether the meaning is preserved, "
     "not whether the phrasing is a literal word-for-word match.",
+    # Coding had no entry here until coding tiers moved to Groq and became reachable enough to
+    # measure. Against execution ground truth the judge was false-failing 3 of 4 working
+    # implementations, with reasons like "fails to explain the implementation of slicing" — it
+    # was grading the explanation, not the code. Step 1 of the base prompt tells it to answer the
+    # question itself first, which for code means writing its own implementation; two correct
+    # programs rarely look alike, so "differs from mine" was reading as "wrong".
+    "coding": "\n\nThis is a coding task. For step 1, do not write your own implementation and "
+    "compare them line by line — two correct programs for the same task usually look nothing "
+    "alike. Instead, hand-execute what the proposed code DOES on the inputs the question "
+    "implies, including an awkward one, and decide whether that behaviour is what was asked "
+    "for.\n"
+    "PASS working code regardless of style: terse or verbose, commented or bare, any correct "
+    "algorithm, any naming, with or without docstrings or type hints. A comment that is wrong or "
+    "misleading is not a reason to fail code that behaves correctly.\n"
+    "FAIL only if hand-executing it gives a wrong result, it crashes, it solves a different "
+    "problem, or it returns the wrong type — for example returning a string where a boolean was "
+    "asked for.",
 }
 
 

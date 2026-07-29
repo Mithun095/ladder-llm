@@ -1,0 +1,86 @@
+{
+  "llama-3.1-8b-instant": {
+    "passed": 8,
+    "attempted": 12,
+    "unavailable": 0,
+    "failures": [
+      "Write a Python function `lcs_length(... -> unparseable response",
+      "Write a Python function `reverse_lis... -> unparseable response",
+      "Write a Python function `word_count(... -> unparseable response",
+      "Write a Python function `word_count(... -> unparseable response"
+    ],
+    "provider": "groq",
+    "total_params_b": 8
+  },
+  "openai/gpt-oss-20b": {
+    "passed": 12,
+    "attempted": 12,
+    "unavailable": 0,
+    "failures": [],
+    "provider": "groq",
+    "total_params_b": 20
+  },
+  "openai/gpt-oss-120b": {
+    "passed": 12,
+    "attempted": 12,
+    "unavailable": 0,
+    "failures": [],
+    "provider": "groq",
+    "total_params_b": 117
+  },
+  "qwen/qwen3.6-27b": {
+    "passed": 11,
+    "attempted": 12,
+    "unavailable": 0,
+    "failures": [
+      "Write a Python function `word_count(... -> unparseable response"
+    ],
+    "provider": "groq",
+    "total_params_b": 27
+  },
+  "llama-3.3-70b-versatile": {
+    "passed": 0,
+    "attempted": 12,
+    "unavailable": 0,
+    "failures": [
+      "Write a Python function `is_palindro... -> unparseable response",
+      "Write a Python function `binary_sear... -> unparseable response",
+      "Write a Python function `merge_sorte... -> unparseable response",
+      "Write a Python function `lcs_length(... -> unparseable response",
+      "Write a Python function `reverse_lis... -> unparseable response",
+      "Write a Python function `word_count(... -> unparseable response",
+      "Write a Python function `is_palindro... -> unparseable response",
+      "Write a Python function `binary_sear... -> unparseable response",
+      "Write a Python function `merge_sorte... -> unparseable response",
+      "Write a Python function `lcs_length(... -> unparseable response",
+      "Write a Python function `reverse_lis... -> unparseable response",
+      "Write a Python function `word_count(... -> unparseable response"
+    ],
+    "provider": "groq",
+    "total_params_b": 70
+  },
+  "cohere/north-mini-code:free": {
+    "passed": 0,
+    "attempted": 0,
+    "unavailable": 12,
+    "failures": [],
+    "provider": "openrouter",
+    "total_params_b": 7
+  },
+  "poolside/laguna-xs-2.1:free": {
+    "passed": 0,
+    "attempted": 0,
+    "unavailable": 12,
+    "failures": [],
+    "provider": "openrouter",
+    "total_params_b": 7
+  },
+  "poolside/laguna-s-2.1:free": {
+    "passed": 0,
+    "attempted": 0,
+    "unavailable": 12,
+    "failures": [],
+    "provider": "openrouter",
+    "total_params_b": 14
+  }
+}

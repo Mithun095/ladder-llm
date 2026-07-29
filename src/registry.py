@@ -48,7 +48,11 @@ class ModelConfig:
 # ordering. The ladder is ordered by price, and metrics.py reports both.
 REGISTRY: dict[tuple[int, str], ModelConfig] = {
     (1, "qa"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
-    (1, "coding"): ModelConfig("openrouter", "cohere/north-mini-code:free", 7, 7),
+    # Was cohere/north-mini-code:free (OpenRouter). Coding used to run on OpenRouter at all four
+    # tiers, which meant that once the account-wide free-models-per-day cap was gone, coding
+    # queries had no path at all — every tier returned 429 and the app showed "no model was
+    # reachable". Groq's limit is per-minute and clears itself. See BUILD-LOG.md #24.
+    (1, "coding"): ModelConfig("groq", "openai/gpt-oss-20b", 3.6, 20, 0.030, 0.130),
     (1, "reasoning"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
     (1, "summarization"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
     (1, "translation"): ModelConfig("groq", "llama-3.1-8b-instant", 8, 8, 0.050, 0.080),
@@ -56,7 +60,7 @@ REGISTRY: dict[tuple[int, str], ModelConfig] = {
     # Tier 2 is the sparse-MoE slot: large total parameter count, small active footprint, and
     # the cheapest published rate in the ladder. This is where most escalations now land.
     (2, "qa"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
-    (2, "coding"): ModelConfig("openrouter", "poolside/laguna-xs-2.1:free", 7, 7),
+    (2, "coding"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
     (2, "reasoning"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
     (2, "summarization"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
     (2, "translation"): ModelConfig("groq", "openai/gpt-oss-120b", 5.1, 117, 0.037, 0.170),
@@ -64,6 +68,12 @@ REGISTRY: dict[tuple[int, str], ModelConfig] = {
     # Tier 3 is the dense-model slot: fewer total params than tier 2 but every one of them active
     # on every token, which is why it costs several times more per token despite being "smaller".
     (3, "qa"): ModelConfig("groq", "qwen/qwen3.6-27b", 27, 27, 0.300, 2.000),
+    # The one code-specialised model still in the ladder. Kept at tier 3 rather than dropped:
+    # it may well beat the general Groq models above it on hard coding tasks, but that is
+    # currently UNMEASURED — the comparison could not reach it (quota), so promoting it on the
+    # assumption that "specialised beats general" would be exactly the guess this project keeps
+    # getting caught by. eval/compare_coding_models.py settles it once the quota resets.
+    #
     # Was poolside/laguna-m.1:free — delisted from OpenRouter's catalog mid-project and started
     # returning 404 "No endpoints found". Caught by checks/check_model_ids.py, which is why
     # that check validates the registry instead of just printing the catalog.

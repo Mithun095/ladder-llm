@@ -121,8 +121,21 @@ def run_generated(code: str, tests: str) -> tuple[bool, str]:
 
 
 def score(provider: str, model_id: str) -> dict:
+    """Two independent failure modes, counted separately.
+
+    The first version of this collapsed them and produced a badly misleading ranking:
+    llama-3.3-70b-versatile scored 0/12 and looked like it couldn't write code. It writes fine —
+    it just never emits the JSON envelope ANSWER_SYSTEM_PROMPT demands, so the response never
+    parsed. Meanwhile every model that *did* parse wrote 100% correct code, so the number that
+    looked like a coding-ability ranking was entirely a JSON-compliance ranking.
+
+    Both matter, for different reasons. A model that can't produce the envelope is unusable in
+    this cascade no matter how good its code is — that's a real disqualification, not a
+    measurement artifact. But it is a different fact from "writes wrong code", and reporting one
+    number for both is the same conflation as BUILD-LOG #19.
+    """
     call_fn = call_groq if provider == "groq" else call_openrouter
-    passed = attempted = unavailable = 0
+    parseable = code_ok = unavailable = unparseable = 0
     failures = []
     for _ in range(REPEATS):
         for prompt, tests in TASKS:
@@ -133,17 +146,21 @@ def score(provider: str, model_id: str) -> dict:
             except ModelUnavailable:
                 unavailable += 1
                 continue
-            attempted += 1
             if result is None:
-                failures.append(f"{prompt[:36]}... -> unparseable response")
+                unparseable += 1
+                failures.append(f"{prompt[:36]}... -> did not return valid JSON")
                 continue
+            parseable += 1
             code = result.answer.replace("```python", "").replace("```", "")
             ok, err = run_generated(code, tests)
-            passed += ok
+            code_ok += ok
             if not ok:
-                failures.append(f"{prompt[:36]}... -> {err}")
-    return {"passed": passed, "attempted": attempted, "unavailable": unavailable,
-            "failures": failures}
+                failures.append(f"{prompt[:36]}... -> assertions failed: {err}")
+    attempted = parseable + unparseable
+    return {"attempted": attempted, "parseable": parseable, "unparseable": unparseable,
+            "code_ok": code_ok, "unavailable": unavailable, "failures": failures,
+            # Kept for older report files that read this key.
+            "passed": code_ok}
 
 
 def main():
@@ -156,19 +173,26 @@ def main():
                  else f"unavailable ({r['unavailable']} calls refused)")
         print(f"  {provider:<11} {model_id:<30} {state}", flush=True)
 
-    print("\n" + "=" * 78)
-    print(f"{'model':<32}{'provider':<12}{'exec pass':<16}{'total'}")
-    ranked = sorted(results.items(),
-                    key=lambda kv: -(kv[1]["passed"] / kv[1]["attempted"]) if kv[1]["attempted"] else 1)
+    print("\n" + "=" * 82)
+    print(f"{'model':<32}{'JSON ok':<12}{'code correct':<16}{'total'}")
+    print("-" * 82)
+    ranked = sorted(results.items(), key=lambda kv: (
+        -(kv[1]["parseable"] / kv[1]["attempted"]) if kv[1]["attempted"] else 1,
+        -(kv[1]["code_ok"] / kv[1]["parseable"]) if kv[1]["parseable"] else 1))
     for model_id, r in ranked:
         if not r["attempted"]:
-            print(f"{model_id:<32}{r['provider']:<12}{'unavailable':<16}{r['total_params_b']}B")
+            print(f"{model_id:<32}{'unavailable — not scored':<28}{r['total_params_b']}B")
             continue
-        pct = r["passed"] / r["attempted"] * 100
-        print(f"{model_id:<32}{r['provider']:<12}{r['passed']}/{r['attempted']} = {pct:5.1f}%   "
-              f"{r['total_params_b']}B")
+        json_pct = r["parseable"] / r["attempted"] * 100
+        code = (f"{r['code_ok']}/{r['parseable']} = {r['code_ok']/r['parseable']*100:5.1f}%"
+                if r["parseable"] else "not measurable")
+        print(f"{model_id:<32}{r['parseable']}/{r['attempted']} = {json_pct:5.1f}%  "
+              f"{code:<16}{r['total_params_b']}B")
         for f in r["failures"][:2]:
             print(f"      {f}")
+    print("\n'JSON ok' is whether the model returned the envelope ANSWER_SYSTEM_PROMPT requires.")
+    print("A model at 0% there is unusable in this cascade regardless of how good its code is,")
+    print("and its code column is unmeasured rather than bad.")
 
     skipped = [m for m, r in results.items() if not r["attempted"]]
     if skipped:
