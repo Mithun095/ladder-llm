@@ -38,6 +38,17 @@ if "result" in st.session_state:
     # The cascade returns the best answer it found even when no tier was ever accepted. Showing
     # that silently is how a judge-rejected answer ends up looking like a verified one — say
     # plainly that every tier failed, and why the last one did.
+    if result.accepted and not result.verified:
+        # Shown rather than silently passing it off as reviewed. The cascade returns its best
+        # answer when the judge is unreachable, which is the right call for a reader — but the
+        # reader should know which of the two they are looking at.
+        st.warning(
+            "**This answer was not reviewed.** The judge model was rate-limited, so the cascade "
+            "returned the answer unchecked rather than withholding it. Treat it as unverified — "
+            "and note it is *not* counted as a pass in the benchmark, because an answer nobody "
+            "checked is not a verified one."
+        )
+
     if not result.accepted:
         last = result.trace[-1] if result.trace else None
         if last is not None and last.status == "judged_fail":
@@ -93,13 +104,17 @@ if "result" in st.session_state:
     with trace_col:
         st.subheader("Routing trace")
         for step in result.trace:
+            # .get with a fallback, not [] — this dict is indexed by a status Literal that has
+            # gained a member before, and a KeyError here fires inside the render path with the
+            # answer already on screen. An unknown status should show as unknown, not crash.
             icon = {
                 "accepted": "✅",
+                "accepted_unverified": "❓",
                 "escalated": "⬆️",
                 "judged_fail": "❌",
                 "unavailable": "⚠️",
                 "malformed_response": "⚠️",
-            }[step.status]
+            }.get(step.status, "•")
             line = f"{icon} **Tier {step.tier}** — `{step.model_id}` — {step.status}"
             if step.confidence is not None:
                 line += f" · confidence {step.confidence}/10"

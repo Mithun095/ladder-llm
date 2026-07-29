@@ -79,7 +79,12 @@ class AnswerResult(BaseModel):
 class TraceStep:
     tier: int
     model_id: str
-    status: Literal["accepted", "escalated", "judged_fail", "unavailable", "malformed_response"]
+    # "accepted_unverified" is deliberately distinct from "accepted": the model answered and the
+    # judge never got to look at it (rate-limited or unparseable). Showing that answer to a user
+    # is reasonable; scoring it as a benchmark pass is not, because then a sweep that loses judge
+    # calls to a rate limit reports a HIGHER pass rate than one that measures everything.
+    status: Literal["accepted", "accepted_unverified", "escalated", "judged_fail",
+                    "unavailable", "malformed_response"]
     confidence: int | None = None
     judge_reason: str | None = None
     active_params_b: float = 0
@@ -99,12 +104,26 @@ class CascadeResult:
 
     @property
     def accepted(self) -> bool:
-        """Did this run actually deliver something the judge signed off on?
+        """Did this run deliver an answer the cascade stands behind enough to show?
+
+        True for a verified pass AND for one the judge never got to see. Use this for anything
+        user-facing: an unverified answer is still the best thing available, and withholding it
+        because the judge was rate-limited helps nobody.
 
         Lives here because every caller needs it and two of them previously each rolled their
         own version — the UI and the eval harness both tested `answer != "<sentinel>"`, which
         asks "is there a string?" not "did this work". A judge-rejected answer is still a
         string, so both reported compute savings on runs that delivered nothing usable.
+        """
+        return bool(self.trace) and self.trace[-1].status in ("accepted", "accepted_unverified")
+
+    @property
+    def verified(self) -> bool:
+        """Did the judge actually look at this answer and pass it?
+
+        Use this, not `accepted`, for any MEASUREMENT. Counting an unjudged answer as a pass
+        means a sweep that loses judge calls to a rate limit scores higher than one that checks
+        every answer — a metric that improves the less data it collects (BUILD-LOG #24).
         """
         return bool(self.trace) and self.trace[-1].status == "accepted"
 
@@ -168,13 +187,13 @@ def run_cascade(query: str, use_cache: bool = True) -> CascadeResult:
             # The judge itself is down or unparseable. Escalating would be pure waste — the
             # next tier's answer would hit the same broken judge and end up here again, one
             # tier more expensive. Accept, but say plainly in the trace that it's unverified.
-            status, reason = "accepted", "accepted unverified — judge unavailable"
+            status, reason = "accepted_unverified", "accepted unverified — judge unavailable"
         else:
             status = "accepted" if verdict.verdict == "pass" else "judged_fail"
             reason = verdict.reason
         trace.append(TraceStep(tier, model_config.model_id, status, result.confidence, reason,
                                model_config.active_params_b, _ms_since(step_started)))
-        if status == "accepted":
+        if status in ("accepted", "accepted_unverified"):
             break
         tier += 1
 
@@ -196,7 +215,9 @@ def run_cascade(query: str, use_cache: bool = True) -> CascadeResult:
     # one verdict in five between identical runs (#21), so a query that failed once would often
     # pass on a retry — except the cache served it the stored failure forever, and no retry could
     # ever happen. Caching a failure converts a transient wrong verdict into a permanent one.
-    if use_cache and result.accepted:
+    # `verified`, not `accepted`: an answer the judge never saw hasn't been checked, and caching
+    # it would freeze an unchecked result in place for the life of the process.
+    if use_cache and result.verified:
         _CACHE[key] = result
     return result
 

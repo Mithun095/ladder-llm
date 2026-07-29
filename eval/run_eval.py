@@ -28,6 +28,7 @@ def main():
     baseline_pass = 0
     baseline_ran = 0
     answered_count = 0
+    unverified = 0
     total_saved_pct = 0.0
     total_cost_saved_pct = 0.0
     total_dollar_saved = 0.0
@@ -41,8 +42,13 @@ def main():
             # measuring the router, and every benchmark query is distinct anyway.
             result = run_cascade(query, use_cache=False)
 
-            cascade_ok = result.accepted
+            # `verified`, not `accepted`. When the judge is rate-limited the cascade still
+            # returns its best answer and marks it accepted-but-unverified, which is right for a
+            # user and wrong for a benchmark: counting it as a pass means a sweep that loses
+            # judge calls scores HIGHER than one that checks everything.
+            cascade_ok = result.verified
             cascade_pass += cascade_ok
+            unverified += result.accepted and not result.verified
 
             for step in result.trace:
                 if step.confidence is not None and step.status in ("accepted", "judged_fail"):
@@ -85,6 +91,7 @@ def main():
                 "baseline_ran": baseline is not None,
                 "baseline_passed": baseline_ok if baseline is not None else None,
                 "answered": answered,
+                "verified": result.verified,
                 "compute_saved_pct": round(saved_pct, 1) if cascade_ok else None,
                 "cost_saved_pct": round(cost_saved_pct, 1) if cascade_ok else None,
             })
@@ -108,6 +115,9 @@ def main():
     summary = {
         "num_queries": n,
         "num_answered": answered_count,
+        # Answers the judge never saw (rate-limited). Excluded from the pass rate on purpose;
+        # reported so a sweep degraded by rate limits is visibly degraded rather than flattered.
+        "num_unverified": unverified,
         "cascade_pass_rate": cascade_pass / n,
         "baseline_ran": baseline_ran,
         "baseline_pass_rate": baseline_pass / baseline_ran if baseline_ran else None,
@@ -123,7 +133,11 @@ def main():
     }
 
     print("\n=== Summary ===")
-    print(f"Cascade pass rate:              {summary['cascade_pass_rate'] * 100:.1f}%")
+    print(f"Cascade pass rate:              {summary['cascade_pass_rate'] * 100:.1f}% "
+          f"(judge-verified only)")
+    if unverified:
+        print(f"  ...plus {unverified} answer(s) the judge never saw (rate-limited). NOT counted "
+              f"as passes — an unchecked answer is not a verified one.")
     if baseline_ran:
         print(f"Baseline (tier {MAX_TIER}) pass rate:      {summary['baseline_pass_rate'] * 100:.1f}% "
               f"(over the {baseline_ran} queries where the tier-{MAX_TIER} model was reachable)")
