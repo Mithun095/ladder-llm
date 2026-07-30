@@ -1276,6 +1276,35 @@ were the ones with a fix smaller than the bug report; the ones left open are the
 
 ---
 
+## 28. #27's own fix broke CI, on a Python version nobody was running locally
+
+**Symptom** — the `checks` GitHub Actions workflow failed on push, "All jobs have failed," on the
+very commit that added #27's fixes.
+
+**Root cause.** The finding #11 fix in `src/formatter.py` used
+`f"| {line.replace('|', '\\|')} |"` — a backslash inside an f-string's `{expression}` part. That
+is a hard `SyntaxError` ("f-string expression part cannot include a backslash") on any Python
+before 3.12; it was only relaxed by PEP 701. Every local check passed because this machine's venv
+runs Python 3.13. CI pins Python 3.11 (`.github/workflows/checks.yml`), and `check_metrics_formatter`
+imports `src.formatter` — so the module failed to even compile, taking down the one CI job that
+exists.
+
+**Fix.** Moved the `.replace()` call out of the f-string entirely — do the escaping in the list
+comprehension that builds `lines`, then interpolate the already-escaped variable. Same output,
+no backslash anywhere inside `{}`.
+
+Verified against the actual failure mode, not just re-run locally: `uv python install 3.11`, a
+`ci311` venv with an exact `pip install -r requirements.txt`, and confirmed (a) the pre-fix file
+throws that exact `SyntaxError` under that interpreter, (b) the post-fix file parses and all five
+`checks` steps pass under it.
+
+**Takeaway:** this repo's only version gate is CI's `python-version: "3.11"` in the workflow —
+nothing local enforces it, so a fix that only ever ran against the dev machine's newer Python can
+look done and still not be. Before trusting a "still passes" answer for something version-gated,
+run it under the actual pinned version, not just any interpreter that happens to be `python`.
+
+---
+
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a
 conclusion was later proven wrong — those corrections are called out inside the original entry
 and cross-linked to the entry that overturned it (see #7 → #17, and #13).*
