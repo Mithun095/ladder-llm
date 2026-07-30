@@ -1,85 +1,113 @@
 {
   "llama-3.1-8b-instant": {
-    "passed": 8,
     "attempted": 12,
+    "parseable": 11,
+    "unparseable": 1,
+    "code_ok": 7,
     "unavailable": 0,
     "failures": [
-      "Write a Python function `lcs_length(... -> unparseable response",
-      "Write a Python function `reverse_lis... -> unparseable response",
-      "Write a Python function `word_count(... -> unparseable response",
-      "Write a Python function `word_count(... -> unparseable response"
+      "Write a Python function `is_palindro... -> assertions failed: AssertionError",
+      "Write a Python function `lcs_length(... -> assertions failed: AssertionError",
+      "Write a Python function `word_count(... -> did not return valid JSON",
+      "Write a Python function `binary_sear... -> assertions failed: SyntaxError: invalid syntax",
+      "Write a Python function `lcs_length(... -> assertions failed: TypeError: unsupported operand type(s) for +: 'int' and 'str'"
     ],
+    "passed": 7,
     "provider": "groq",
     "total_params_b": 8
   },
   "openai/gpt-oss-20b": {
-    "passed": 12,
     "attempted": 12,
+    "parseable": 12,
+    "unparseable": 0,
+    "code_ok": 12,
     "unavailable": 0,
     "failures": [],
+    "passed": 12,
     "provider": "groq",
     "total_params_b": 20
   },
   "openai/gpt-oss-120b": {
-    "passed": 12,
     "attempted": 12,
+    "parseable": 12,
+    "unparseable": 0,
+    "code_ok": 12,
     "unavailable": 0,
     "failures": [],
+    "passed": 12,
     "provider": "groq",
     "total_params_b": 117
   },
   "qwen/qwen3.6-27b": {
-    "passed": 11,
     "attempted": 12,
+    "parseable": 10,
+    "unparseable": 2,
+    "code_ok": 9,
     "unavailable": 0,
     "failures": [
-      "Write a Python function `word_count(... -> unparseable response"
+      "Write a Python function `merge_sorte... -> assertions failed: AssertionError",
+      "Write a Python function `word_count(... -> did not return valid JSON",
+      "Write a Python function `word_count(... -> did not return valid JSON"
     ],
+    "passed": 9,
     "provider": "groq",
     "total_params_b": 27
   },
   "llama-3.3-70b-versatile": {
-    "passed": 0,
     "attempted": 12,
+    "parseable": 1,
+    "unparseable": 11,
+    "code_ok": 1,
     "unavailable": 0,
     "failures": [
-      "Write a Python function `is_palindro... -> unparseable response",
-      "Write a Python function `binary_sear... -> unparseable response",
-      "Write a Python function `merge_sorte... -> unparseable response",
-      "Write a Python function `lcs_length(... -> unparseable response",
-      "Write a Python function `reverse_lis... -> unparseable response",
-      "Write a Python function `word_count(... -> unparseable response",
-      "Write a Python function `is_palindro... -> unparseable response",
-      "Write a Python function `binary_sear... -> unparseable response",
-      "Write a Python function `merge_sorte... -> unparseable response",
-      "Write a Python function `lcs_length(... -> unparseable response",
-      "Write a Python function `reverse_lis... -> unparseable response",
-      "Write a Python function `word_count(... -> unparseable response"
+      "Write a Python function `is_palindro... -> did not return valid JSON",
+      "Write a Python function `binary_sear... -> did not return valid JSON",
+      "Write a Python function `merge_sorte... -> did not return valid JSON",
+      "Write a Python function `reverse_lis... -> did not return valid JSON",
+      "Write a Python function `word_count(... -> did not return valid JSON",
+      "Write a Python function `is_palindro... -> did not return valid JSON",
+      "Write a Python function `binary_sear... -> did not return valid JSON",
+      "Write a Python function `merge_sorte... -> did not return valid JSON",
+      "Write a Python function `lcs_length(... -> did not return valid JSON",
+      "Write a Python function `reverse_lis... -> did not return valid JSON",
+      "Write a Python function `word_count(... -> did not return valid JSON"
     ],
+    "passed": 1,
     "provider": "groq",
     "total_params_b": 70
   },
   "cohere/north-mini-code:free": {
-    "passed": 0,
-    "attempted": 0,
-    "unavailable": 12,
-    "failures": [],
+    "attempted": 12,
+    "parseable": 12,
+    "unparseable": 0,
+    "code_ok": 11,
+    "unavailable": 0,
+    "failures": [
+      "Write a Python function `is_palindro... -> assertions failed: SyntaxError: unexpected character after line continuation character"
+    ],
+    "passed": 11,
     "provider": "openrouter",
     "total_params_b": 7
   },
   "poolside/laguna-xs-2.1:free": {
-    "passed": 0,
-    "attempted": 0,
-    "unavailable": 12,
+    "attempted": 12,
+    "parseable": 12,
+    "unparseable": 0,
+    "code_ok": 12,
+    "unavailable": 0,
     "failures": [],
+    "passed": 12,
     "provider": "openrouter",
     "total_params_b": 7
   },
   "poolside/laguna-s-2.1:free": {
-    "passed": 0,
-    "attempted": 0,
-    "unavailable": 12,
+    "attempted": 12,
+    "parseable": 12,
+    "unparseable": 0,
+    "code_ok": 12,
+    "unavailable": 0,
     "failures": [],
+    "passed": 12,
     "provider": "openrouter",
     "total_params_b": 14
   }
