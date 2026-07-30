@@ -8,7 +8,7 @@ print("Trace:")
 for step in result.trace:
     print(f"  tier={step.tier} model={step.model_id} status={step.status} confidence={step.confidence}")
 
-assert result.answer and result.answer != "No model produced a usable answer."
+assert result.answer and result.answered
 assert len(result.trace) >= 1
 assert result.trace[-1].status in (
     "accepted", "accepted_unverified", "judged_fail", "unavailable", "malformed_response",

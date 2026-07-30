@@ -21,10 +21,18 @@ st.caption(
 query = st.text_input("Ask a question", placeholder="e.g. A farmer has 17 sheep. All but 9 die. How many are left?")
 submit = st.button("Submit", type="primary")
 
+if submit and not query:
+    st.warning("Type a question first.")
+
 if submit and query:
     try:
-        with st.spinner("Routing through the cascade..."):
+        with st.status("Routing through the cascade...", expanded=True) as status:
+            st.write("Trying tiers in order, cheapest first, until one passes judge review.")
             result = run_cascade(query)
+            status.update(
+                label=f"Resolved at tier {result.tier_used} of {MAX_TIER}",
+                state="complete", expanded=False,
+            )
         st.session_state["result"] = result
     except Exception as e:
         # call_json re-raises any provider status code it doesn't recognize as retryable

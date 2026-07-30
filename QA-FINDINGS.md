@@ -25,11 +25,13 @@ Every command below assumes `cd /home/mithun/Desktop/ladder-llm`.
 **Status, checked against current `HEAD` after this report landed:** findings 1, 2, 4, and 8
 verified as real and fixed in commit `5c04196` (BUILD-LOG #26) — findings 1 and 4 turned out
 to share one root cause (code reading `trace[-1]` as if it always explained the outcome), so
-they're written up as one entry there. Findings 3, 5, 6, 7 and the LOW/COSMETIC items (9-14)
-are left open below: 3 is a single non-reproduced judge-noise observation, not a code defect;
-5 was judged working-as-intended (the caveat is already shown alongside the number); 6 and 7
-are real but design-level — no quick fix without a larger conversation about prompt-injection
-handling.
+they're written up as one entry there. Findings 10, 11, 13, and 14 were fixed in a later pass
+(BUILD-LOG #27). Findings 3, 5, 6, 7, 9, and 12 are left open below: 3 is a single
+non-reproduced judge-noise observation, not a code defect; 5 was judged working-as-intended
+(the caveat is already shown alongside the number); 6 and 7 are real but design-level — no
+quick fix without a larger conversation about prompt-injection handling; 9's lowercasing is a
+documented deliberate tradeoff in the `_CACHE` comment, not an oversight; 12 is cosmetic
+(judge reasons render in the query's language under a hardcoded English label).
 
 ---
 

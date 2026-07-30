@@ -127,6 +127,18 @@ class CascadeResult:
         """
         return bool(self.trace) and self.trace[-1].status == "accepted"
 
+    @property
+    def answered(self) -> bool:
+        """Did any tier produce text at all — model reachable and output parseable?
+
+        Distinct from `accepted`/`verified`: this says nothing about whether the answer was
+        any good, only whether "no model was reachable" would be a false description of what
+        happened. Use this instead of comparing `answer` to the cascade's own placeholder
+        string (QA finding #13) — that string is a value `answer` can legitimately hold as
+        genuine model output, not just a sentinel for "nothing came back".
+        """
+        return any(s.status not in ("unavailable", "malformed_response") for s in self.trace)
+
 
 def _cache_key(query: str) -> str:
     return " ".join(query.lower().split())
@@ -136,9 +148,11 @@ def run_cascade(query: str, use_cache: bool = True) -> CascadeResult:
     started = time.perf_counter()
     key = _cache_key(query)
     if use_cache and key in _CACHE:
-        # The trace is kept as-is so the UI can still show how this answer was originally
-        # reached; `cached` is what tells the caller no models ran *this* time.
-        return replace(_CACHE[key], cached=True, elapsed_ms=0)
+        # The trace is copied, not shared: `replace()` is a shallow copy, so returning
+        # `_CACHE[key].trace` directly would let a caller that mutates its result corrupt the
+        # cached entry for the life of the process (QA finding #10).
+        cached = _CACHE[key]
+        return replace(cached, cached=True, elapsed_ms=0, trace=list(cached.trace))
 
     classification = classify(query)
     prompt = query if classification.type in PRESERVE_QUERY_TYPES else classification.optimized_prompt

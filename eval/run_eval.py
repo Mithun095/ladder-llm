@@ -68,7 +68,7 @@ def main():
             saved_pct = compute_saved_pct(result.trace, result.type)
             cost_saved_pct = dollar_saved_pct(result.trace, result.type)
             dollar_saved = estimate_dollar_saved(result.trace, result.type)
-            answered = result.answer != "No model produced a usable answer."
+            answered = result.answered
             answered_count += answered
             if cascade_ok:
                 total_saved_pct += saved_pct

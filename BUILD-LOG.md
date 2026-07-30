@@ -1240,6 +1240,42 @@ without producing anything new?
 
 ---
 
+## 27. Four QA findings left open after #26, closed out
+
+The same adversarial pass that found #26 also filed ten LOW/COSMETIC findings. Four had a real,
+low-risk fix; four (#3, #5, #6, #7 in QA-FINDINGS.md) are either non-defects or design-level
+questions that need a larger conversation, and stay open on purpose.
+
+- **Cache aliasing (finding #10).** `run_cascade`'s cache hit returned
+  `replace(_CACHE[key], cached=True, elapsed_ms=0)` — a shallow copy, so the returned `trace` was
+  the *same list object* as the cached entry's. No current caller mutates a returned trace, so
+  this was latent, not live, but any future one would silently corrupt the cache for the rest of
+  the process. Fixed by copying the list in the same `replace()` call.
+- **Broken markdown table (finding #11).** `format_answer`'s translation table splits multi-line
+  answers into one row per line but didn't escape literal `|` characters in the content, so a
+  translated line containing `|` split into extra table cells instead of rendering as text.
+  Fixed by escaping `|` before building each row.
+- **Sentinel-string check outside cascade.py (finding #13).** `eval/run_eval.py` and
+  `checks/check_cascade.py` both tested `result.answer != "No model produced a usable answer."`
+  — exactly the `answer != "<sentinel>"` shape #11, #16, #19 and #26 exist to stamp out, even
+  though here it happened to be semantically correct (it gates a separately-tracked `answered`
+  counter, not a savings figure). Added `CascadeResult.answered` — true iff some trace step isn't
+  `unavailable`/`malformed_response` — next to `accepted`/`verified`, and pointed both call sites
+  at it instead of the string.
+- **Silent empty submit (finding #14).** Pressing Submit with an empty query box did nothing
+  visible. `app.py` now shows `st.warning("Type a question first.")` in that case.
+
+Left open, unchanged: #9 (cache key lowercases, called out as a deliberate tradeoff in the
+`_CACHE` comment already), #3 (single non-reproduced judge-noise observation), #5 (judged
+working-as-intended), #6 and #7 (prompt-injection handling — real, but a scope decision, not a
+one-line fix).
+
+**Takeaway:** not every QA finding needs the same response. The ones worth fixing immediately
+were the ones with a fix smaller than the bug report; the ones left open are the ones where the
+"fix" is actually a design decision that deserves its own discussion instead of a reflexive patch.
+
+---
+
 *Entries are appended as new issues surface. Nothing here is retro-edited except where a
 conclusion was later proven wrong — those corrections are called out inside the original entry
 and cross-linked to the entry that overturned it (see #7 → #17, and #13).*
